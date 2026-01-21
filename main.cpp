@@ -1,16 +1,22 @@
 #define NOMINMAX
-#include "Win95Style.h"
 #include "DECtalkWrapper.h"
 #include "imgui.h"
 #include "imgui_impl_win32.h"
 #include "imgui_impl_dx11.h"
 #include <d3d11.h>
+#include <dwmapi.h>
 #include <tchar.h>
-#include <iostream>
-#include <uxtheme.h>
-#pragma comment(lib, "uxtheme.lib")
+#include <string>
 
-// DirectX data
+#pragma comment(lib, "dwmapi.lib")
+#include <dwmapi.h>
+
+#pragma comment(lib, "dwmapi.lib")
+#include <dwmapi.h>
+
+#pragma comment(lib, "dwmapi.lib")
+
+// Data
 static ID3D11Device* g_pd3dDevice = nullptr;
 static ID3D11DeviceContext* g_pd3dDeviceContext = nullptr;
 static IDXGISwapChain* g_pSwapChain = nullptr;
@@ -23,27 +29,187 @@ void CreateRenderTarget();
 void CleanupRenderTarget();
 LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
-// DECtalk instance
-DECtalkWrapper* g_tts = nullptr;
+// DECTalk instance
+DECtalkWrapper dectalk;
 
-int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow)
+// UI State
+static int selectedVoice = 0;
+static const char* voiceNames[] = { "Paul", "Betty", "Harry", "Frank", "Dennis", "Kit", "Ursula", "Rita", "Wendy" };
+static int volume = 100;
+static char textBuffer[1024] = "Hello, I am DECtalk.";
+
+// Window state
+static bool isMaximized = false;
+static RECT restoreRect = {};
+
+// Win98 Color Scheme
+void ApplyWin98Style()
 {
+    ImGuiStyle& style = ImGui::GetStyle();
+    ImVec4* colors = style.Colors;
 
-    // Allocate a console for debugging
-    AllocConsole();
-    FILE* fp;
-    freopen_s(&fp, "CONOUT$", "w", stdout);
-    freopen_s(&fp, "CONOUT$", "w", stderr);
+    // Classic Win98 colors
+    colors[ImGuiCol_Text] = ImVec4(0.0f, 0.0f, 0.0f, 1.0f);
+    colors[ImGuiCol_TextDisabled] = ImVec4(0.6f, 0.6f, 0.6f, 1.0f);
+    colors[ImGuiCol_WindowBg] = ImVec4(0.76f, 0.76f, 0.76f, 1.0f); // Win98 gray
+    colors[ImGuiCol_ChildBg] = ImVec4(0.76f, 0.76f, 0.76f, 1.0f);
+    colors[ImGuiCol_PopupBg] = ImVec4(0.76f, 0.76f, 0.76f, 1.0f);
+    colors[ImGuiCol_Border] = ImVec4(0.0f, 0.0f, 0.0f, 1.0f);
+    colors[ImGuiCol_BorderShadow] = ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
+    colors[ImGuiCol_FrameBg] = ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
+    colors[ImGuiCol_FrameBgHovered] = ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
+    colors[ImGuiCol_FrameBgActive] = ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
+    colors[ImGuiCol_TitleBg] = ImVec4(0.0f, 0.0f, 0.5f, 1.0f); // Win98 blue
+    colors[ImGuiCol_TitleBgActive] = ImVec4(0.0f, 0.0f, 0.5f, 1.0f);
+    colors[ImGuiCol_TitleBgCollapsed] = ImVec4(0.0f, 0.0f, 0.5f, 1.0f);
+    colors[ImGuiCol_MenuBarBg] = ImVec4(0.76f, 0.76f, 0.76f, 1.0f);
+    colors[ImGuiCol_ScrollbarBg] = ImVec4(0.76f, 0.76f, 0.76f, 1.0f);
+    colors[ImGuiCol_ScrollbarGrab] = ImVec4(0.76f, 0.76f, 0.76f, 1.0f);
+    colors[ImGuiCol_ScrollbarGrabHovered] = ImVec4(0.7f, 0.7f, 0.7f, 1.0f);
+    colors[ImGuiCol_ScrollbarGrabActive] = ImVec4(0.6f, 0.6f, 0.6f, 1.0f);
+    colors[ImGuiCol_CheckMark] = ImVec4(0.0f, 0.0f, 0.0f, 1.0f);
+    colors[ImGuiCol_SliderGrab] = ImVec4(0.76f, 0.76f, 0.76f, 1.0f);
+    colors[ImGuiCol_SliderGrabActive] = ImVec4(0.6f, 0.6f, 0.6f, 1.0f);
+    colors[ImGuiCol_Button] = ImVec4(0.76f, 0.76f, 0.76f, 1.0f);
+    colors[ImGuiCol_ButtonHovered] = ImVec4(0.8f, 0.8f, 0.8f, 1.0f);
+    colors[ImGuiCol_ButtonActive] = ImVec4(0.6f, 0.6f, 0.6f, 1.0f);
+    colors[ImGuiCol_Header] = ImVec4(0.0f, 0.0f, 0.5f, 1.0f);
+    colors[ImGuiCol_HeaderHovered] = ImVec4(0.0f, 0.0f, 0.6f, 1.0f);
+    colors[ImGuiCol_HeaderActive] = ImVec4(0.0f, 0.0f, 0.7f, 1.0f);
+    colors[ImGuiCol_Separator] = ImVec4(0.5f, 0.5f, 0.5f, 1.0f);
+    colors[ImGuiCol_SeparatorHovered] = ImVec4(0.6f, 0.6f, 0.6f, 1.0f);
+    colors[ImGuiCol_SeparatorActive] = ImVec4(0.7f, 0.7f, 0.7f, 1.0f);
+    colors[ImGuiCol_ResizeGrip] = ImVec4(0.76f, 0.76f, 0.76f, 1.0f);
+    colors[ImGuiCol_ResizeGripHovered] = ImVec4(0.8f, 0.8f, 0.8f, 1.0f);
+    colors[ImGuiCol_ResizeGripActive] = ImVec4(0.6f, 0.6f, 0.6f, 1.0f);
+    colors[ImGuiCol_Tab] = ImVec4(0.76f, 0.76f, 0.76f, 1.0f);
+    colors[ImGuiCol_TabHovered] = ImVec4(0.8f, 0.8f, 0.8f, 1.0f);
+    colors[ImGuiCol_TabActive] = ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
+    colors[ImGuiCol_TabUnfocused] = ImVec4(0.76f, 0.76f, 0.76f, 1.0f);
+    colors[ImGuiCol_TabUnfocusedActive] = ImVec4(0.8f, 0.8f, 0.8f, 1.0f);
 
-    std::cout << "GobTalk Debug Console" << std::endl;
+    // Win98 style settings
+    style.WindowRounding = 0.0f;
+    style.ChildRounding = 0.0f;
+    style.FrameRounding = 0.0f;
+    style.GrabRounding = 0.0f;
+    style.PopupRounding = 0.0f;
+    style.ScrollbarRounding = 0.0f;
+    style.TabRounding = 0.0f;
+    style.WindowBorderSize = 0.0f;     // We draw custom window border
+    style.ChildBorderSize = 0.0f;      // We draw custom sunken borders
+    style.FrameBorderSize = 1.0f;
+    style.FramePadding = ImVec2(4.0f, 3.0f);
+    style.ItemSpacing = ImVec2(8.0f, 4.0f);
+    style.ScrollbarSize = 16.0f;
+}
 
-    // Create application window
-    WNDCLASSEXW wc = { sizeof(wc), CS_CLASSDC, WndProc, 0L, 0L, GetModuleHandle(nullptr), nullptr, nullptr, nullptr, nullptr, L"GobTalk", nullptr };
+// Draw Win98-style beveled border (inset or outset)
+void DrawWin98Bevel(ImDrawList* draw_list, ImVec2 min, ImVec2 max, bool sunken = false, int thickness = 2)
+{
+    ImU32 lightOuter = IM_COL32(255, 255, 255, 255);   // Bright white
+    ImU32 lightInner = IM_COL32(223, 223, 223, 255);   // Light gray
+    ImU32 darkInner = IM_COL32(128, 128, 128, 255);    // Dark gray
+    ImU32 darkOuter = IM_COL32(0, 0, 0, 255);          // Black
+
+    if (sunken) {
+        // SUNKEN/INSET (content areas, text boxes)
+        // Outer: dark on top-left, light on bottom-right
+        draw_list->AddLine(ImVec2(min.x, max.y - 1), min, darkOuter, 1.0f);  // Left
+        draw_list->AddLine(min, ImVec2(max.x, min.y), darkOuter, 1.0f);      // Top
+        draw_list->AddLine(ImVec2(max.x - 1, min.y), ImVec2(max.x - 1, max.y), lightOuter, 1.0f);  // Right
+        draw_list->AddLine(ImVec2(max.x - 1, max.y - 1), ImVec2(min.x, max.y - 1), lightOuter, 1.0f);  // Bottom
+
+        if (thickness >= 2) {
+            // Inner: dark gray on top-left, light gray on bottom-right
+            draw_list->AddLine(ImVec2(min.x + 1, max.y - 2), ImVec2(min.x + 1, min.y + 1), darkInner, 1.0f);  // Left
+            draw_list->AddLine(ImVec2(min.x + 1, min.y + 1), ImVec2(max.x - 1, min.y + 1), darkInner, 1.0f);  // Top
+            draw_list->AddLine(ImVec2(max.x - 2, min.y + 1), ImVec2(max.x - 2, max.y - 1), lightInner, 1.0f);  // Right
+            draw_list->AddLine(ImVec2(max.x - 2, max.y - 2), ImVec2(min.x + 1, max.y - 2), lightInner, 1.0f);  // Bottom
+        }
+    }
+    else {
+        // RAISED/OUTSET (window border, buttons, toolbars)
+        // Outer: light on top-left, dark on bottom-right
+        draw_list->AddLine(ImVec2(min.x, max.y - 1), min, lightOuter, 1.0f);  // Left
+        draw_list->AddLine(min, ImVec2(max.x, min.y), lightOuter, 1.0f);      // Top
+        draw_list->AddLine(ImVec2(max.x - 1, min.y), ImVec2(max.x - 1, max.y), darkOuter, 1.0f);  // Right
+        draw_list->AddLine(ImVec2(max.x - 1, max.y - 1), ImVec2(min.x, max.y - 1), darkOuter, 1.0f);  // Bottom
+
+        if (thickness >= 2) {
+            // Inner: light gray on top-left, dark gray on bottom-right
+            draw_list->AddLine(ImVec2(min.x + 1, max.y - 2), ImVec2(min.x + 1, min.y + 1), lightInner, 1.0f);  // Left
+            draw_list->AddLine(ImVec2(min.x + 1, min.y + 1), ImVec2(max.x - 1, min.y + 1), lightInner, 1.0f);  // Top
+            draw_list->AddLine(ImVec2(max.x - 2, min.y + 1), ImVec2(max.x - 2, max.y - 1), darkInner, 1.0f);  // Right
+            draw_list->AddLine(ImVec2(max.x - 2, max.y - 2), ImVec2(min.x + 1, max.y - 2), darkInner, 1.0f);  // Bottom
+        }
+    }
+}
+
+// Draw Win98 style 3D border
+void DrawWin98Border(ImDrawList* draw_list, ImVec2 min, ImVec2 max, bool pressed = false)
+{
+    ImU32 light = IM_COL32(255, 255, 255, 255);
+    ImU32 dark = IM_COL32(64, 64, 64, 255);
+    ImU32 shadow = IM_COL32(128, 128, 128, 255);
+
+    if (pressed) {
+        // Pressed state (inverted)
+        draw_list->AddLine(ImVec2(min.x, max.y), min, dark);
+        draw_list->AddLine(min, ImVec2(max.x, min.y), dark);
+        draw_list->AddLine(ImVec2(min.x + 1, max.y), ImVec2(min.x + 1, min.y + 1), shadow);
+        draw_list->AddLine(ImVec2(min.x + 1, min.y + 1), ImVec2(max.x, min.y + 1), shadow);
+    }
+    else {
+        // Normal raised state
+        draw_list->AddLine(ImVec2(min.x, max.y), min, light);
+        draw_list->AddLine(min, ImVec2(max.x, min.y), light);
+        draw_list->AddLine(ImVec2(max.x, min.y), max, dark);
+        draw_list->AddLine(max, ImVec2(min.x, max.y), dark);
+        draw_list->AddLine(ImVec2(max.x - 1, min.y + 1), ImVec2(max.x - 1, max.y - 1), shadow);
+        draw_list->AddLine(ImVec2(max.x - 1, max.y - 1), ImVec2(min.x + 1, max.y - 1), shadow);
+    }
+}
+
+// Custom Win98-style button using only public APIs
+bool Win98Button(const char* label, const ImVec2& size_arg = ImVec2(0, 0))
+{
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0f);
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.76f, 0.76f, 0.76f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.8f, 0.8f, 0.8f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.6f, 0.6f, 0.6f, 1.0f));
+
+    bool result = ImGui::Button(label, size_arg);
+
+    ImGui::PopStyleColor(3);
+    ImGui::PopStyleVar();
+
+    return result;
+}
+
+int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow)
+{
+    (void)hPrevInstance;
+    (void)lpCmdLine;
+    (void)nCmdShow;
+
+    // Initialize DECTalk
+    if (!dectalk.Initialize("dectalk.dll", WAVE_MAPPER)) {
+        MessageBoxA(nullptr, "Failed to initialize DECtalk!\n\nMake sure dectalk.dll is in the same folder as the .exe", "Error", MB_OK | MB_ICONERROR);
+        return 1;
+    }
+
+    // Create borderless application window
+    WNDCLASSEXW wc = { sizeof(wc), CS_CLASSDC, WndProc, 0L, 0L, hInstance, nullptr, nullptr,
+        (HBRUSH)(COLOR_BTNFACE + 1), nullptr, L"Gobtalk", nullptr }; // Set gray background
     ::RegisterClassExW(&wc);
-    HWND hwnd = ::CreateWindowW(wc.lpszClassName, L"GobTalk - DECtalk Twitch Bot",
-        WS_OVERLAPPEDWINDOW, 100, 100, 800, 600, nullptr, nullptr, wc.hInstance, nullptr);
+    HWND hwnd = ::CreateWindowExW(0, wc.lpszClassName, L"Gobtalk - DECtalk Interface",
+        WS_POPUP | WS_THICKFRAME, // Borderless but resizable
+        100, 100, 600, 500, nullptr, nullptr, wc.hInstance, nullptr);
 
-    SetWindowTheme(hwnd, L"", L"");
+    // Remove rounded corners (Windows 11)
+    DWM_WINDOW_CORNER_PREFERENCE cornerPref = DWMWCP_DONOTROUND;
+    DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &cornerPref, sizeof(cornerPref));
 
     // Initialize Direct3D
     if (!CreateDeviceD3D(hwnd))
@@ -60,30 +226,55 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     // Setup Dear ImGui context
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
-    ImGuiIO& io = ImGui::GetIO();
+    ImGuiIO& io = ImGui::GetIO(); (void)io;
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+
+    // Font rendering settings for sharper text
+    ImFontConfig fontConfig;
+    fontConfig.OversampleH = 2;  // Horizontal oversampling for sharper rendering
+    fontConfig.OversampleV = 2;  // Vertical oversampling
+    fontConfig.PixelSnapH = true; // Snap to pixel grid for crisp edges
+
+    // Load MS Sans Serif fonts at 14px for better clarity
+    ImFont* fontRegular = nullptr;
+    ImFont* fontBold = nullptr;
+
+    // Try to load custom fonts
+    fontRegular = io.Fonts->AddFontFromFileTTF("MS Sans Serif.ttf", 14.0f, &fontConfig);
+    fontBold = io.Fonts->AddFontFromFileTTF("MS Sans Serif Bold.ttf", 14.0f, &fontConfig);
+
+    // If either font failed to load, use default font for both
+    if (!fontRegular || !fontBold) {
+        io.Fonts->Clear(); // Clear any partial loads
+        fontConfig.SizePixels = 14.0f;
+        fontRegular = io.Fonts->AddFontDefault(&fontConfig);
+        fontBold = fontRegular; // Use same font for both
+
+        // Optional: Show warning message (only once)
+        static bool shownWarning = false;
+        if (!shownWarning) {
+            MessageBoxA(nullptr,
+                "MS Sans Serif fonts not found - using default font.\n\n"
+                "For authentic Win98 look, place these files next to the .exe:\n"
+                "- MS Sans Serif.ttf\n"
+                "- MS Sans Serif Bold.ttf",
+                "Font Warning", MB_OK | MB_ICONWARNING);
+            shownWarning = true;
+        }
+    }
+
+    // Apply Win98 style
+    ApplyWin98Style();
 
     // Setup Platform/Renderer backends
     ImGui_ImplWin32_Init(hwnd);
     ImGui_ImplDX11_Init(g_pd3dDevice, g_pd3dDeviceContext);
 
-	// Applies styling from Win95Style.h
-    ApplyWin98Style();
-
-    // Initialize DECtalk
-    g_tts = new DECtalkWrapper();
-    if (!g_tts->Initialize("DECtalk.dll")) {
-        MessageBoxA(hwnd, "Failed to initialize DECtalk!\n\nMake sure DECtalk.dll and dtalk_us.dic are in the same folder as the executable.", "Error", MB_OK | MB_ICONERROR);
-    }
-
-    // Our state
-    ImVec4 clear_color = ImVec4(0.75f, 0.75f, 0.75f, 1.00f); // Win95 gray
-    char testMessage[256] = "Hello, this is a test message!";
-    int currentVoice = 0;
-    int volume = 100;
-
     // Main loop
     bool done = false;
+    bool isDragging = false;
+    ImVec2 dragOffset;
+
     while (!done)
     {
         MSG msg;
@@ -102,205 +293,424 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         ImGui_ImplWin32_NewFrame();
         ImGui::NewFrame();
 
-        // Main window
+        // Use regular font for all UI (title bar will override with bold)
+        ImGui::PushFont(fontRegular);
+
+        // Get window size
+        ImGuiViewport* viewport = ImGui::GetMainViewport();
+        ImVec2 windowSize = viewport->Size;
+
+        // Full-window ImGui container (no default title bar)
         ImGui::SetNextWindowPos(ImVec2(0, 0));
-        ImGui::SetNextWindowSize(io.DisplaySize);
-        ImGui::Begin("GobTalk - DECtalk Twitch Bot", nullptr,
+        ImGui::SetNextWindowSize(windowSize);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+
+        ImGui::Begin("MainWindow", nullptr,
             ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
             ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
-            ImGuiWindowFlags_MenuBar);
+            ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus);
 
-        // Manual menu bar
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.75f, 0.75f, 0.75f, 1.0f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.85f, 0.85f, 0.85f, 1.0f));
-
-        if (ImGui::Button("File")) ImGui::OpenPopup("FileMenu");
-        ImGui::SameLine();
-        if (ImGui::Button("Edit")) ImGui::OpenPopup("EditMenu");
-        ImGui::SameLine();
-        if (ImGui::Button("Help")) ImGui::OpenPopup("HelpMenu");
-
-        // File menu popup
-        if (ImGui::BeginPopup("FileMenu")) {
-            if (ImGui::MenuItem("Exit")) {
-                done = true;
-            }
-            ImGui::EndPopup();
-        }
-
-        // Edit menu popup
-        if (ImGui::BeginPopup("EditMenu")) {
-            if (ImGui::MenuItem("Preferences")) {
-                // TODO
-            }
-            ImGui::EndPopup();
-        }
-
-        // Help menu popup
-        if (ImGui::BeginPopup("HelpMenu")) {
-            if (ImGui::MenuItem("About")) {
-                // TODO
-            }
-            ImGui::EndPopup();
-        }
-
-        ImGui::PopStyleColor(2);
-        ImGui::PopStyleVar();
-
-        ImGui::Separator(); // Line under menu bar
-        
-        // Content area with padding
-        ImGui::SetCursorPos(ImVec2(8, ImGui::GetCursorPosY() + 4));
-        ImGui::BeginChild("ContentArea", ImVec2(io.DisplaySize.x - 16, io.DisplaySize.y - ImGui::GetCursorPosY() - 8), false);
-
-        // Tab bar
-        static int activeTab = 0;
-        ImGui::BeginGroup();
-
-        if (Win98Button("Voice Settings", ImVec2(120, 0))) activeTab = 0;
-        ImGui::SameLine(0, 2);
-        if (Win98Button("Connection", ImVec2(120, 0))) activeTab = 1;
-        ImGui::SameLine(0, 2);
-        if (Win98Button("Permissions", ImVec2(120, 0))) activeTab = 2;
-        ImGui::SameLine(0, 2);
-        if (Win98Button("Filters", ImVec2(120, 0))) activeTab = 3;
-
-        ImGui::EndGroup();
-
-        // Draw line under tabs
         ImDrawList* draw_list = ImGui::GetWindowDrawList();
-        ImVec2 line_start = ImGui::GetItemRectMin();
-        line_start.y = ImGui::GetItemRectMax().y;
-        ImVec2 line_end = ImVec2(io.DisplaySize.x - 16, line_start.y);
-        draw_list->AddLine(line_start, line_end, WIN98_DARK_GRAY);
-        draw_list->AddLine(ImVec2(line_start.x, line_start.y + 1), ImVec2(line_end.x, line_end.y + 1), WIN98_WHITE);
 
-        ImGui::Spacing();
-        ImGui::Spacing();
+        // ===== WIN98 WINDOW STRUCTURE =====
+        const float outerBorderWidth = 4;      // Outer raised border around ENTIRE window
+        const float titleBarHeight = 20;       // Title bar height (slightly taller for 14px font)
+        const float menuBarHeight = 20;        // Menu bar height (increased for readability)
+        const float tabBarHeight = 23;         // Tab bar height (increased for readability)
+        // ==================================
 
-        // Tab content
-        if (activeTab == 0) {
-            // Voice Settings
-            BeginWin98GroupBox("Voice Selection", ImVec2(400, 0));
+        // STEP 1: Draw OUTER RAISED BORDER (all 4 sides including top)
+        ImU32 lightOuter = IM_COL32(255, 255, 255, 255);
+        ImU32 lightInner = IM_COL32(223, 223, 223, 255);
+        ImU32 darkInner = IM_COL32(128, 128, 128, 255);
+        ImU32 darkOuter = IM_COL32(0, 0, 0, 255);
 
-            const char* voices[] = { "Paul", "Betty", "Harry", "Frank", "Dennis", "Kit", "Ursula", "Rita", "Wendy" };
-            ImGui::Text("Current Voice:");
-            ImGui::SameLine();
-            ImGui::SetNextItemWidth(150);
-            if (ImGui::Combo("##voice", &currentVoice, voices, IM_ARRAYSIZE(voices))) {
-                if (g_tts) g_tts->SetVoice(currentVoice);
+        // Top border (4 pixels)
+        draw_list->AddLine(ImVec2(0, 0), ImVec2(windowSize.x, 0), lightOuter, 1.0f);
+        draw_list->AddLine(ImVec2(0, 1), ImVec2(windowSize.x, 1), lightInner, 1.0f);
+        draw_list->AddLine(ImVec2(0, 2), ImVec2(windowSize.x, 2), IM_COL32(240, 240, 240, 255), 1.0f);
+        draw_list->AddLine(ImVec2(0, 3), ImVec2(windowSize.x, 3), IM_COL32(192, 192, 192, 255), 1.0f);
+
+        // Left border (4 pixels)
+        draw_list->AddLine(ImVec2(0, 0), ImVec2(0, windowSize.y), lightOuter, 1.0f);
+        draw_list->AddLine(ImVec2(1, 0), ImVec2(1, windowSize.y), lightInner, 1.0f);
+        draw_list->AddLine(ImVec2(2, 0), ImVec2(2, windowSize.y), IM_COL32(240, 240, 240, 255), 1.0f);
+        draw_list->AddLine(ImVec2(3, 0), ImVec2(3, windowSize.y), IM_COL32(192, 192, 192, 255), 1.0f);
+
+        // Right border (4 pixels)
+        draw_list->AddLine(ImVec2(windowSize.x - 1, 0), ImVec2(windowSize.x - 1, windowSize.y), darkOuter, 1.0f);
+        draw_list->AddLine(ImVec2(windowSize.x - 2, 0), ImVec2(windowSize.x - 2, windowSize.y), darkInner, 1.0f);
+        draw_list->AddLine(ImVec2(windowSize.x - 3, 0), ImVec2(windowSize.x - 3, windowSize.y), IM_COL32(160, 160, 160, 255), 1.0f);
+        draw_list->AddLine(ImVec2(windowSize.x - 4, 0), ImVec2(windowSize.x - 4, windowSize.y), IM_COL32(192, 192, 192, 255), 1.0f);
+
+        // Bottom border (4 pixels)
+        draw_list->AddLine(ImVec2(0, windowSize.y - 1), ImVec2(windowSize.x, windowSize.y - 1), darkOuter, 1.0f);
+        draw_list->AddLine(ImVec2(0, windowSize.y - 2), ImVec2(windowSize.x, windowSize.y - 2), darkInner, 1.0f);
+        draw_list->AddLine(ImVec2(0, windowSize.y - 3), ImVec2(windowSize.x, windowSize.y - 3), IM_COL32(160, 160, 160, 255), 1.0f);
+        draw_list->AddLine(ImVec2(0, windowSize.y - 4), ImVec2(windowSize.x, windowSize.y - 4), IM_COL32(192, 192, 192, 255), 1.0f);
+
+        // STEP 2: Title Bar (INSIDE the outer border)
+        ImVec2 titleBarMin = ImVec2(outerBorderWidth, outerBorderWidth);
+        ImVec2 titleBarMax = ImVec2(windowSize.x - outerBorderWidth, outerBorderWidth + titleBarHeight);
+
+        // Title bar gradient (Win98 blue)
+        ImU32 titleColorStart = IM_COL32(0, 0, 128, 255);
+        ImU32 titleColorEnd = IM_COL32(16, 132, 208, 255);
+        draw_list->AddRectFilledMultiColor(titleBarMin, titleBarMax,
+            titleColorStart, titleColorEnd, titleColorEnd, titleColorStart);
+
+        // Title bar text (using BOLD font at 14px)
+        const char* titleText = "Gobtalk - DECtalk Interface";
+        draw_list->AddText(fontBold, 14.0f, ImVec2(titleBarMin.x + 8, titleBarMin.y + (titleBarHeight - 14.0f) * 0.5f),
+            IM_COL32(255, 255, 255, 255), titleText);
+
+        // Title bar buttons (X, Maximize, Minimize)
+        const float buttonSize = 16.0f;
+        const float buttonY = titleBarMin.y + (titleBarHeight - buttonSize) * 0.5f;
+        float buttonX = titleBarMax.x - 22.0f;
+
+        // Close button (X)
+        ImVec2 closeBtnMin = ImVec2(buttonX, buttonY);
+        ImVec2 closeBtnMax = ImVec2(buttonX + buttonSize, buttonY + buttonSize);
+        bool closeHovered = ImGui::IsMouseHoveringRect(closeBtnMin, closeBtnMax);
+        bool closeClicked = closeHovered && ImGui::IsMouseClicked(0);
+
+        draw_list->AddRectFilled(closeBtnMin, closeBtnMax,
+            closeHovered ? IM_COL32(220, 220, 220, 255) : IM_COL32(192, 192, 192, 255));
+        DrawWin98Border(draw_list, closeBtnMin, closeBtnMax, closeClicked);
+
+        // X symbol (thin like Win98)
+        float crossPad = 4.0f;
+        draw_list->AddLine(ImVec2(closeBtnMin.x + crossPad, closeBtnMin.y + crossPad),
+            ImVec2(closeBtnMax.x - crossPad, closeBtnMax.y - crossPad), IM_COL32(0, 0, 0, 255), 1.0f);
+        draw_list->AddLine(ImVec2(closeBtnMax.x - crossPad, closeBtnMin.y + crossPad),
+            ImVec2(closeBtnMin.x + crossPad, closeBtnMax.y - crossPad), IM_COL32(0, 0, 0, 255), 1.0f);
+
+        if (closeClicked) {
+            done = true;
+        }
+
+        // Maximize button
+        buttonX -= 18.0f;
+        ImVec2 maxBtnMin = ImVec2(buttonX, buttonY);
+        ImVec2 maxBtnMax = ImVec2(buttonX + buttonSize, buttonY + buttonSize);
+        bool maxHovered = ImGui::IsMouseHoveringRect(maxBtnMin, maxBtnMax);
+        bool maxClicked = maxHovered && ImGui::IsMouseClicked(0);
+
+        draw_list->AddRectFilled(maxBtnMin, maxBtnMax,
+            maxHovered ? IM_COL32(220, 220, 220, 255) : IM_COL32(192, 192, 192, 255));
+        DrawWin98Border(draw_list, maxBtnMin, maxBtnMax, maxClicked);
+
+        // Square symbol (thin like Win98)
+        float sqPad = 4.0f;
+        draw_list->AddRect(ImVec2(maxBtnMin.x + sqPad, maxBtnMin.y + sqPad),
+            ImVec2(maxBtnMax.x - sqPad, maxBtnMax.y - sqPad), IM_COL32(0, 0, 0, 255), 0.0f, 0, 1.0f);
+
+        if (maxClicked) {
+            if (isMaximized) {
+                WINDOWPLACEMENT wp = {};
+                wp.length = sizeof(WINDOWPLACEMENT);
+                wp.showCmd = SW_RESTORE;
+                wp.rcNormalPosition = restoreRect;
+                SetWindowPlacement(hwnd, &wp);
+                isMaximized = false;
+            }
+            else {
+                GetWindowRect(hwnd, &restoreRect);
+                MONITORINFO mi = { sizeof(mi) };
+                GetMonitorInfo(MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY), &mi);
+                SetWindowPos(hwnd, NULL, mi.rcWork.left, mi.rcWork.top,
+                    mi.rcWork.right - mi.rcWork.left, mi.rcWork.bottom - mi.rcWork.top, 0);
+                isMaximized = true;
+            }
+        }
+
+        // Minimize button
+        buttonX -= 18.0f;
+        ImVec2 minBtnMin = ImVec2(buttonX, buttonY);
+        ImVec2 minBtnMax = ImVec2(buttonX + buttonSize, buttonY + buttonSize);
+        bool minHovered = ImGui::IsMouseHoveringRect(minBtnMin, minBtnMax);
+        bool minClicked = minHovered && ImGui::IsMouseClicked(0);
+
+        draw_list->AddRectFilled(minBtnMin, minBtnMax,
+            minHovered ? IM_COL32(220, 220, 220, 255) : IM_COL32(192, 192, 192, 255));
+        DrawWin98Border(draw_list, minBtnMin, minBtnMax, minClicked);
+
+        // Line symbol (thin like Win98)
+        draw_list->AddLine(ImVec2(minBtnMin.x + 4, minBtnMax.y - 6),
+            ImVec2(minBtnMax.x - 4, minBtnMax.y - 6), IM_COL32(0, 0, 0, 255), 1.0f);
+
+        if (minClicked) {
+            ShowWindow(hwnd, SW_MINIMIZE);
+        }
+
+        // Handle title bar dragging
+        ImVec2 mousePos = ImGui::GetMousePos();
+        bool inTitleBar = mousePos.y >= titleBarMin.y &&
+            mousePos.y < titleBarMax.y &&
+            mousePos.x >= titleBarMin.x &&
+            mousePos.x < buttonX - 10;
+
+        if (inTitleBar && ImGui::IsMouseClicked(0)) {
+            isDragging = true;
+            POINT pt;
+            GetCursorPos(&pt);
+            RECT rect;
+            GetWindowRect(hwnd, &rect);
+            dragOffset = ImVec2((float)(pt.x - rect.left), (float)(pt.y - rect.top));
+        }
+
+        if (isDragging) {
+            if (ImGui::IsMouseDown(0)) {
+                POINT pt;
+                GetCursorPos(&pt);
+                SetWindowPos(hwnd, NULL, pt.x - (int)dragOffset.x, pt.y - (int)dragOffset.y, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
+            }
+            else {
+                isDragging = false;
+            }
+        }
+
+        // STEP 3: Menu Bar (File, Edit, About)
+        float menuBarY = outerBorderWidth + titleBarHeight;
+        ImVec2 menuBarMin = ImVec2(outerBorderWidth, menuBarY);
+        ImVec2 menuBarSize = ImVec2(windowSize.x - (outerBorderWidth * 2), menuBarHeight);
+
+        // Gray background for menu bar
+        draw_list->AddRectFilled(menuBarMin, ImVec2(menuBarMin.x + menuBarSize.x, menuBarMin.y + menuBarSize.y),
+            IM_COL32(192, 192, 192, 255));
+
+        // Menu items - Win98 style (flat by default, raised on hover)
+        const char* menuItems[] = { "File", "Edit", "About" };
+        float menuX = menuBarMin.x + 4;
+
+        // ===== MENU ITEM PADDING (adjust border spacing here) =====
+        const float menuPaddingX = 8;      // Horizontal padding (left/right of text) - BIGGER = MORE SPACE
+        const float menuPaddingY = 3;      // Vertical padding (top/bottom of text) - BIGGER = MORE SPACE
+        // ==========================================================
+
+        for (int i = 0; i < IM_ARRAYSIZE(menuItems); i++) {
+            ImVec2 textSize = ImGui::CalcTextSize(menuItems[i]);
+
+            // Calculate text position first (centered in menu bar)
+            ImVec2 textPos = ImVec2(menuX + menuPaddingX, menuBarMin.y + (menuBarSize.y - textSize.y) * 0.5f);
+
+            // Calculate border box AROUND the text (with padding)
+            ImVec2 itemMin = ImVec2(textPos.x - menuPaddingX, textPos.y - menuPaddingY);
+            ImVec2 itemMax = ImVec2(textPos.x + textSize.x + menuPaddingX, textPos.y + textSize.y + menuPaddingY);
+
+            float menuItemWidth = itemMax.x - itemMin.x;
+
+            // Check hover
+            bool isHovered = ImGui::IsMouseHoveringRect(itemMin, itemMax);
+            bool isClicked = isHovered && ImGui::IsMouseClicked(0);
+
+            if (isHovered) {
+                // Draw raised 3D border on hover
+                DrawWin98Border(draw_list, itemMin, itemMax, false);
             }
 
-            EndWin98GroupBox("Voice Selection");
+            // Draw text (with underlined first letter for hotkey)
+            draw_list->AddText(textPos, IM_COL32(0, 0, 0, 255), menuItems[i]);
 
-            ImGui::Spacing();
+            // Draw underline under first letter (hotkey indicator)
+            float underlineY = textPos.y + textSize.y;
+            ImVec2 firstCharSize = ImGui::CalcTextSize(menuItems[i], menuItems[i] + 1);
+            draw_list->AddLine(ImVec2(textPos.x, underlineY),
+                ImVec2(textPos.x + firstCharSize.x, underlineY),
+                IM_COL32(0, 0, 0, 255), 1.0f);
 
-            BeginWin98GroupBox("Volume", ImVec2(400, 0));
-
-            ImGui::Text("Master Volume:");
-            ImGui::SetNextItemWidth(250);
-            if (ImGui::SliderInt("##volume", &volume, 0, 100, "%d%%")) {
-                if (g_tts) g_tts->SetVolume(volume);
+            if (isClicked) {
+                // TODO: Open menu dropdown
             }
 
-            EndWin98GroupBox("Volume");
+            menuX += menuItemWidth + 1;
+        }
 
-            ImGui::Spacing();
+        // STEP 4: Tab Bar (Win98 paper-tab style)
+        static int selectedTab = 0;
+        const char* tabNames[] = { "Voice Settings", "Advanced" };
+        float tabBarY = menuBarY + menuBarHeight;
+        ImVec2 tabBarMin = ImVec2(outerBorderWidth, tabBarY);
 
-            BeginWin98GroupBox("Test Voice", ImVec2(400, 0));
+        // Draw tab background area
+        draw_list->AddRectFilled(ImVec2(tabBarMin.x, tabBarMin.y),
+            ImVec2(windowSize.x - outerBorderWidth, tabBarMin.y + tabBarHeight),
+            IM_COL32(192, 192, 192, 255));
 
-            ImGui::Text("Test Message:");
-            ImGui::SetNextItemWidth(350);
-            ImGui::InputText("##testmsg", testMessage, IM_ARRAYSIZE(testMessage));
+        // Draw tabs
+        float tabX = tabBarMin.x + 4;
+        for (int i = 0; i < IM_ARRAYSIZE(tabNames); i++) {
+            ImVec2 tabTextSize = ImGui::CalcTextSize(tabNames[i]);
+            float tabWidth = tabTextSize.x + 24;
+            bool isSelected = (selectedTab == i);
 
-            ImGui::Spacing();
-            if (Win98Button("Speak Test Message", ImVec2(140, 0))) {
-                if (g_tts) {
-                    g_tts->Speak(testMessage);
+            ImVec2 tabMin = ImVec2(tabX, tabBarMin.y + (isSelected ? 2 : 4));
+            ImVec2 tabMax = ImVec2(tabX + tabWidth, tabBarMin.y + tabBarHeight);
+
+            // Tab background - gray for selected, slightly darker for unselected
+            ImU32 tabColor = isSelected ? IM_COL32(192, 192, 192, 255) : IM_COL32(192, 192, 192, 255);
+            draw_list->AddRectFilled(tabMin, tabMax, tabColor);
+
+            // Tab border (Win98 paper-tab effect)
+            if (isSelected) {
+                // Selected tab: raised border on top and sides, NO bottom (flows into content)
+                // Left edge
+                draw_list->AddLine(ImVec2(tabMin.x, tabMax.y), ImVec2(tabMin.x, tabMin.y + 2), IM_COL32(255, 255, 255, 255), 1.0f);
+                // Top-left corner
+                draw_list->AddLine(ImVec2(tabMin.x, tabMin.y + 2), ImVec2(tabMin.x + 2, tabMin.y), IM_COL32(255, 255, 255, 255), 1.0f);
+                // Top edge
+                draw_list->AddLine(ImVec2(tabMin.x + 2, tabMin.y), ImVec2(tabMax.x - 2, tabMin.y), IM_COL32(255, 255, 255, 255), 1.0f);
+                // Top-right corner
+                draw_list->AddLine(ImVec2(tabMax.x - 2, tabMin.y), ImVec2(tabMax.x, tabMin.y + 2), IM_COL32(128, 128, 128, 255), 1.0f);
+                // Right edge (outer)
+                draw_list->AddLine(ImVec2(tabMax.x, tabMin.y + 2), ImVec2(tabMax.x, tabMax.y), IM_COL32(0, 0, 0, 255), 1.0f);
+                // Right edge (inner shadow)
+                draw_list->AddLine(ImVec2(tabMax.x - 1, tabMin.y + 2), ImVec2(tabMax.x - 1, tabMax.y), IM_COL32(128, 128, 128, 255), 1.0f);
+                // NO BOTTOM BORDER - tab flows seamlessly into content area below
+            }
+            else {
+                // Unselected tab: slightly recessed with all borders
+                draw_list->AddLine(ImVec2(tabMin.x, tabMax.y - 1), ImVec2(tabMin.x, tabMin.y + 2), IM_COL32(223, 223, 223, 255), 1.0f); // Left
+                draw_list->AddLine(ImVec2(tabMin.x, tabMin.y + 2), ImVec2(tabMin.x + 2, tabMin.y), IM_COL32(223, 223, 223, 255), 1.0f); // Corner
+                draw_list->AddLine(ImVec2(tabMin.x + 2, tabMin.y), ImVec2(tabMax.x - 2, tabMin.y), IM_COL32(223, 223, 223, 255), 1.0f); // Top
+                draw_list->AddLine(ImVec2(tabMax.x - 2, tabMin.y), ImVec2(tabMax.x, tabMin.y + 2), IM_COL32(128, 128, 128, 255), 1.0f); // Corner
+                draw_list->AddLine(ImVec2(tabMax.x, tabMin.y + 2), ImVec2(tabMax.x, tabMax.y - 1), IM_COL32(128, 128, 128, 255), 1.0f); // Right
+                draw_list->AddLine(ImVec2(tabMin.x, tabMax.y - 1), ImVec2(tabMax.x, tabMax.y - 1), IM_COL32(128, 128, 128, 255), 1.0f); // Bottom
+            }
+
+            // Tab text - black for selected, slightly gray for unselected
+            ImU32 textColor = isSelected ? IM_COL32(0, 0, 0, 255) : IM_COL32(64, 64, 64, 255);
+            draw_list->AddText(ImVec2(tabX + 12, tabMin.y + (tabMax.y - tabMin.y - tabTextSize.y) * 0.5f),
+                textColor, tabNames[i]);
+
+            // Click detection
+            bool tabHovered = ImGui::IsMouseHoveringRect(tabMin, tabMax);
+            if (tabHovered && ImGui::IsMouseClicked(0)) {
+                selectedTab = i;
+            }
+
+            tabX += tabWidth + 2;
+        }
+
+        // STEP 5: Content area (RAISED gray panel - blends with selected tab)
+        float contentY = tabBarY + tabBarHeight;
+        ImVec2 contentAreaMin = ImVec2(outerBorderWidth + 4, contentY);
+        ImVec2 contentAreaMax = ImVec2(windowSize.x - outerBorderWidth - 4, windowSize.y - outerBorderWidth - 4);
+
+        // Gray background for content (RGB 192,192,192 - button face color)
+        draw_list->AddRectFilled(contentAreaMin, contentAreaMax, IM_COL32(192, 192, 192, 255));
+
+        // Calculate where selected tab is
+        float selectedTabStartX = tabBarMin.x + 4;
+        for (int i = 0; i < selectedTab; i++) {
+            ImVec2 tabTextSize = ImGui::CalcTextSize(tabNames[i]);
+            selectedTabStartX += tabTextSize.x + 24 + 2;
+        }
+        ImVec2 selectedTabTextSize = ImGui::CalcTextSize(tabNames[selectedTab]);
+        float selectedTabEndX = selectedTabStartX + selectedTabTextSize.x + 24;
+
+        // Draw RAISED bevel around content - but skip top border where tab connects
+        // (Reusing lightOuter, lightInner, darkInner, darkOuter from window border above)
+
+        // Left border (raised)
+        draw_list->AddLine(ImVec2(contentAreaMin.x, contentAreaMax.y - 1), contentAreaMin, lightOuter, 1.0f);
+        draw_list->AddLine(ImVec2(contentAreaMin.x + 1, contentAreaMax.y - 2), ImVec2(contentAreaMin.x + 1, contentAreaMin.y + 1), lightInner, 1.0f);
+
+        // Top border (raised) - SKIP the selected tab area
+        // Draw from left edge to start of selected tab
+        draw_list->AddLine(contentAreaMin, ImVec2(selectedTabStartX + 1, contentAreaMin.y), lightOuter, 1.0f);
+        draw_list->AddLine(ImVec2(contentAreaMin.x + 1, contentAreaMin.y + 1), ImVec2(selectedTabStartX + 1, contentAreaMin.y + 1), lightInner, 1.0f);
+        // Draw from end of selected tab to right edge
+        draw_list->AddLine(ImVec2(selectedTabEndX - 1, contentAreaMin.y), ImVec2(contentAreaMax.x, contentAreaMin.y), lightOuter, 1.0f);
+        draw_list->AddLine(ImVec2(selectedTabEndX - 1, contentAreaMin.y + 1), ImVec2(contentAreaMax.x - 1, contentAreaMin.y + 1), lightInner, 1.0f);
+
+        // Right border (raised)
+        draw_list->AddLine(ImVec2(contentAreaMax.x - 1, contentAreaMin.y), ImVec2(contentAreaMax.x - 1, contentAreaMax.y), darkOuter, 1.0f);
+        draw_list->AddLine(ImVec2(contentAreaMax.x - 2, contentAreaMin.y + 1), ImVec2(contentAreaMax.x - 2, contentAreaMax.y - 1), darkInner, 1.0f);
+
+        // Bottom border (raised)
+        draw_list->AddLine(ImVec2(contentAreaMax.x - 1, contentAreaMax.y - 1), ImVec2(contentAreaMin.x, contentAreaMax.y - 1), darkOuter, 1.0f);
+        draw_list->AddLine(ImVec2(contentAreaMax.x - 2, contentAreaMax.y - 2), ImVec2(contentAreaMin.x + 1, contentAreaMax.y - 2), darkInner, 1.0f);
+
+        ImVec2 contentPos = ImVec2(contentAreaMin.x + 8, contentAreaMin.y + 8);
+        ImVec2 contentSize = ImVec2(contentAreaMax.x - contentAreaMin.x - 16,
+            contentAreaMax.y - contentAreaMin.y - 16);
+
+        ImGui::SetCursorScreenPos(contentPos);
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.75f, 0.75f, 0.75f, 1.0f)); // Gray background
+        ImGui::BeginChild("TabContent", contentSize, false);
+
+        // Tab content based on selection
+        if (selectedTab == 0) {
+            // Voice Settings tab content
+            ImGui::Text("Voice Selection");
+            ImGui::Separator();
+
+            for (int i = 0; i < IM_ARRAYSIZE(voiceNames); i++)
+            {
+                if (ImGui::RadioButton(voiceNames[i], &selectedVoice, i))
+                {
+                    dectalk.SetVoice(i);
                 }
+                if ((i + 1) % 3 != 0) ImGui::SameLine();
             }
-
-            EndWin98GroupBox("Test Voice");
-        }
-        else if (activeTab == 1) {
-            // Connection
-            BeginWin98GroupBox("Twitch", ImVec2(400, 0));
-
-            ImGui::Text("Status: Not Connected");
-            ImGui::Spacing();
-
-            if (Win98Button("Connect to Twitch", ImVec2(140, 0))) {
-                // TODO: Implement connection
-            }
-
-            EndWin98GroupBox("Twitch");
 
             ImGui::Spacing();
-
-            BeginWin98GroupBox("YouTube", ImVec2(400, 0));
-
-            ImGui::Text("Status: Not Connected");
+            ImGui::Separator();
             ImGui::Spacing();
 
-            if (Win98Button("Connect to YouTube", ImVec2(140, 0))) {
-                // TODO: Implement connection
+            ImGui::Text("Voice Parameters");
+            ImGui::Text("Volume:");
+            ImGui::SameLine(80);
+            if (ImGui::SliderInt("##volume", &volume, 0, 100))
+            {
+                dectalk.SetVolume(volume);
             }
 
-            EndWin98GroupBox("YouTube");
-        }
-        else if (activeTab == 2) {
-            // Permissions
-            BeginWin98GroupBox("Enable TTS For", ImVec2(400, 0));
-
-            static bool chatEnabled = false;
-            static bool subsEnabled = true;
-            static bool bitsEnabled = true;
-            static bool channelPointsEnabled = true;
-            static bool vipEnabled = true;
-            static bool modEnabled = true;
-
-            ImGui::Checkbox("Chat Messages", &chatEnabled);
-            ImGui::Checkbox("Subscriptions", &subsEnabled);
-            ImGui::Checkbox("Bit Donations", &bitsEnabled);
-            ImGui::Checkbox("Channel Point Redeems", &channelPointsEnabled);
-            ImGui::Checkbox("VIPs", &vipEnabled);
-            ImGui::Checkbox("Moderators", &modEnabled);
-
-            EndWin98GroupBox("Enable TTS For");
-        }
-        else if (activeTab == 3) {
-            // Filters
-            BeginWin98GroupBox("Message Filtering", ImVec2(400, 0));
-
-            ImGui::Text("Configure word and user filters");
+            ImGui::Spacing();
+            ImGui::Separator();
             ImGui::Spacing();
 
-            if (Win98Button("Edit Blacklist", ImVec2(140, 0))) {
-                // TODO: Open blacklist editor
-            }
-            ImGui::SameLine();
-            if (Win98Button("Edit Whitelist", ImVec2(140, 0))) {
-                // TODO: Open whitelist editor
-            }
+            ImGui::Text("Text to Speak");
+            ImGui::InputTextMultiline("##text", textBuffer, IM_ARRAYSIZE(textBuffer), ImVec2(-1, 100));
 
-            EndWin98GroupBox("Message Filtering");
+            ImGui::Spacing();
+
+            if (Win98Button("Speak", ImVec2(200, 30)))
+            {
+                dectalk.Speak(textBuffer);
+            }
+        }
+        else if (selectedTab == 1) {
+            // Advanced tab content
+            ImGui::Text("Advanced Settings");
+            ImGui::Separator();
+            ImGui::Spacing();
+            ImGui::Text("Additional voice parameters and options will go here.");
         }
 
-        ImGui::EndChild();
+        ImGui::EndChild(); // TabContent
+        ImGui::PopStyleColor(); // Pop white background
+
         ImGui::End();
+        ImGui::PopStyleVar(3);
+
+        ImGui::PopFont(); // Pop regular font
 
         // Rendering
         ImGui::Render();
+        const float clear_color_with_alpha[4] = { 0.76f, 0.76f, 0.76f, 1.00f };
         g_pd3dDeviceContext->OMSetRenderTargets(1, &g_mainRenderTargetView, nullptr);
-        g_pd3dDeviceContext->ClearRenderTargetView(g_mainRenderTargetView, (float*)&clear_color);
+        g_pd3dDeviceContext->ClearRenderTargetView(g_mainRenderTargetView, clear_color_with_alpha);
         ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
 
         g_pSwapChain->Present(1, 0);
     }
 
     // Cleanup
-    delete g_tts;
     ImGui_ImplDX11_Shutdown();
     ImGui_ImplWin32_Shutdown();
     ImGui::DestroyContext();
@@ -335,6 +745,8 @@ bool CreateDeviceD3D(HWND hWnd)
     D3D_FEATURE_LEVEL featureLevel;
     const D3D_FEATURE_LEVEL featureLevelArray[2] = { D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_10_0, };
     HRESULT res = D3D11CreateDeviceAndSwapChain(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, createDeviceFlags, featureLevelArray, 2, D3D11_SDK_VERSION, &sd, &g_pSwapChain, &g_pd3dDevice, &featureLevel, &g_pd3dDeviceContext);
+    if (res == DXGI_ERROR_UNSUPPORTED)
+        res = D3D11CreateDeviceAndSwapChain(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, createDeviceFlags, featureLevelArray, 2, D3D11_SDK_VERSION, &sd, &g_pSwapChain, &g_pd3dDevice, &featureLevel, &g_pd3dDeviceContext);
     if (res != S_OK)
         return false;
 
@@ -364,6 +776,7 @@ void CleanupRenderTarget()
 }
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
+
 LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     if (ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam))
@@ -371,11 +784,29 @@ LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
     switch (msg)
     {
+    case WM_NCCALCSIZE:
+        // Tell Windows the entire window is client area (no title bar, no frame)
+        if (wParam == TRUE) {
+            // Return 0 to indicate the entire window is client area
+            return 0;
+        }
+        break;
+    case WM_ERASEBKGND:
+    {
+        // Paint the window background gray to match ImGui
+        HDC hdc = (HDC)wParam;
+        RECT rect;
+        GetClientRect(hWnd, &rect);
+        HBRUSH brush = CreateSolidBrush(RGB(194, 194, 194)); // Win98 gray
+        FillRect(hdc, &rect, brush);
+        DeleteObject(brush);
+        return 1;
+    }
     case WM_SIZE:
         if (g_pd3dDevice != nullptr && wParam != SIZE_MINIMIZED)
         {
             CleanupRenderTarget();
-            g_pSwapChain->ResizeBuffers(0, (UINT)LRESULT(lParam) & 0xFFFF, (UINT)LRESULT(lParam) >> 16, DXGI_FORMAT_UNKNOWN, 0);
+            g_pSwapChain->ResizeBuffers(0, (UINT)LOWORD(lParam), (UINT)HIWORD(lParam), DXGI_FORMAT_UNKNOWN, 0);
             CreateRenderTarget();
         }
         return 0;
