@@ -1,5 +1,8 @@
 #define NOMINMAX
+#include <WinSock2.h>
+#include <WS2tcpip.h>
 #include "DECtalkWrapper.h"
+#include "Twitchauth.h"
 #include "imgui.h"
 #include "imgui_impl_win32.h"
 #include "imgui_impl_dx11.h"
@@ -7,8 +10,12 @@
 #include <dwmapi.h>
 #include <tchar.h>
 #include <string>
+#include <iostream>
+#include <thread>
+#include <chrono>
 
 #pragma comment(lib, "dwmapi.lib")
+#pragma comment(lib, "ws2_32.lib")
 #include <dwmapi.h>
 
 #pragma comment(lib, "dwmapi.lib")
@@ -31,6 +38,13 @@ LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
 // DECTalk instance
 DECtalkWrapper dectalk;
+
+// Twitch instance
+TwitchAuth twitchAuth;
+
+// Icon textures for connection status
+ID3D11ShaderResourceView* g_iconNoNetwork = nullptr;
+ID3D11ShaderResourceView* g_iconConnected = nullptr;
 
 // UI State
 static int selectedVoice = 0;
@@ -187,8 +201,109 @@ bool Win98Button(const char* label, const ImVec2& size_arg = ImVec2(0, 0))
     return result;
 }
 
+// Helper function to load .ico file as a texture
+bool LoadIconTexture(const char* filename, ID3D11Device* device, ID3D11ShaderResourceView** out_srv)
+{
+    // Load icon file
+    HICON hIcon = (HICON)LoadImageA(NULL, filename, IMAGE_ICON, 32, 32, LR_LOADFROMFILE);
+    if (!hIcon) {
+        return false;
+    }
+
+    // Get icon info
+    ICONINFO iconInfo;
+    if (!GetIconInfo(hIcon, &iconInfo)) {
+        DestroyIcon(hIcon);
+        return false;
+    }
+
+    // Get bitmap info
+    BITMAP bmp;
+    GetObject(iconInfo.hbmColor, sizeof(BITMAP), &bmp);
+
+    // Create a device context
+    HDC hdcScreen = GetDC(NULL);
+    HDC hdcMem = CreateCompatibleDC(hdcScreen);
+
+    // Create a 32-bit bitmap for the icon
+    BITMAPINFO bmi = {};
+    bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bmi.bmiHeader.biWidth = 32;
+    bmi.bmiHeader.biHeight = -32; // Top-down
+    bmi.bmiHeader.biPlanes = 1;
+    bmi.bmiHeader.biBitCount = 32;
+    bmi.bmiHeader.biCompression = BI_RGB;
+
+    void* pBits = nullptr;
+    HBITMAP hBitmap = CreateDIBSection(hdcMem, &bmi, DIB_RGB_COLORS, &pBits, NULL, 0);
+    if (!hBitmap) {
+        DeleteDC(hdcMem);
+        ReleaseDC(NULL, hdcScreen);
+        DeleteObject(iconInfo.hbmColor);
+        DeleteObject(iconInfo.hbmMask);
+        DestroyIcon(hIcon);
+        return false;
+    }
+
+    // Select bitmap and draw icon
+    HBITMAP hOldBitmap = (HBITMAP)SelectObject(hdcMem, hBitmap);
+    DrawIconEx(hdcMem, 0, 0, hIcon, 32, 32, 0, NULL, DI_NORMAL);
+    SelectObject(hdcMem, hOldBitmap);
+
+    // Create D3D11 texture
+    D3D11_TEXTURE2D_DESC desc = {};
+    desc.Width = 32;
+    desc.Height = 32;
+    desc.MipLevels = 1;
+    desc.ArraySize = 1;
+    desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    desc.SampleDesc.Count = 1;
+    desc.Usage = D3D11_USAGE_DEFAULT;
+    desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+
+    D3D11_SUBRESOURCE_DATA initData = {};
+    initData.pSysMem = pBits;
+    initData.SysMemPitch = 32 * 4; // 32 pixels * 4 bytes per pixel
+
+    ID3D11Texture2D* pTexture = nullptr;
+    HRESULT hr = device->CreateTexture2D(&desc, &initData, &pTexture);
+
+    if (SUCCEEDED(hr)) {
+        // Create shader resource view
+        D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+        srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+        srvDesc.Texture2D.MipLevels = 1;
+
+        hr = device->CreateShaderResourceView(pTexture, &srvDesc, out_srv);
+        pTexture->Release();
+    }
+
+    // Cleanup
+    DeleteObject(hBitmap);
+    DeleteDC(hdcMem);
+    ReleaseDC(NULL, hdcScreen);
+    DeleteObject(iconInfo.hbmColor);
+    DeleteObject(iconInfo.hbmMask);
+    DestroyIcon(hIcon);
+
+    return SUCCEEDED(hr);
+}
+
 int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow)
 {
+    // Allocate console for debugging
+    AllocConsole();
+    FILE* fDummy;
+    freopen_s(&fDummy, "CONOUT$", "w", stdout);
+    freopen_s(&fDummy, "CONOUT$", "w", stderr);
+    freopen_s(&fDummy, "CONIN$", "r", stdin);
+    std::cout.clear();
+    std::clog.clear();
+    std::cerr.clear();
+    std::cin.clear();
+
+    std::cout << "=== GobTalk Debug Console ===" << std::endl;
     (void)hPrevInstance;
     (void)lpCmdLine;
     (void)nCmdShow;
@@ -240,7 +355,7 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
     ImFont* fontBold = nullptr;
 
     // Try to load custom fonts
-    fontRegular = io.Fonts->AddFontFromFileTTF("MS Sans Serif.ttf", 14.0f, &fontConfig);
+    fontRegular = io.Fonts->AddFontFromFileTTF("MS Sans Serif.ttf", 12.0f, &fontConfig);
     fontBold = io.Fonts->AddFontFromFileTTF("MS Sans Serif Bold.ttf", 14.0f, &fontConfig);
 
     // If either font failed to load, use default font for both
@@ -269,6 +384,26 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
     // Setup Platform/Renderer backends
     ImGui_ImplWin32_Init(hwnd);
     ImGui_ImplDX11_Init(g_pd3dDevice, g_pd3dDeviceContext);
+
+    // Load connection status icons
+    LoadIconTexture("conn_pcs_no_network_32x32.ico", g_pd3dDevice, &g_iconNoNetwork);
+    LoadIconTexture("conn_pcs_on_on_32x32.ico", g_pd3dDevice, &g_iconConnected);
+
+    // Auto-connect to Twitch on startup if already authenticated
+    std::cout << "[Startup] Checking for saved Twitch credentials..." << std::endl;
+    if (twitchAuth.IsAuthenticated()) {
+        std::cout << "[Startup] Found saved credentials for user: " << twitchAuth.GetUsername() << std::endl;
+        std::cout << "[Startup] Auto-connecting to Twitch..." << std::endl;
+
+        // Connect in a separate thread so UI doesn't block
+        std::thread([&]() {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1000)); // Wait 1 second for UI to fully initialize
+            twitchAuth.Connect(twitchAuth.GetUsername());
+            }).detach();
+    }
+    else {
+        std::cout << "[Startup] No saved credentials found. Click 'Connect To Twitch' to authenticate." << std::endl;
+    }
 
     // Main loop
     bool done = false;
@@ -531,7 +666,7 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
 
         // STEP 4: Tab Bar (Win98 paper-tab style)
         static int selectedTab = 0;
-        const char* tabNames[] = { "Voice Settings", "Advanced" };
+        const char* tabNames[] = { "Voice Settings", "Connections" };
         float tabBarY = menuBarY + menuBarHeight;
         ImVec2 tabBarMin = ImVec2(outerBorderWidth, tabBarY);
 
@@ -685,11 +820,65 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
             }
         }
         else if (selectedTab == 1) {
-            // Advanced tab content
-            ImGui::Text("Advanced Settings");
+            // Connections tab content
+            ImGui::Text("Twitch Connection");
             ImGui::Separator();
             ImGui::Spacing();
-            ImGui::Text("Additional voice parameters and options will go here.");
+
+            // Connect button
+            ConnectionStatus currentStatus = twitchAuth.GetStatus();
+            bool isConnected = (currentStatus == ConnectionStatus::Connected);
+            bool isConnecting = (currentStatus == ConnectionStatus::Connecting);
+
+            const char* buttonText = isConnected ? "Connected to Twitch" :
+                isConnecting ? "Connecting..." :
+                "Connect To Twitch";
+
+            if (Win98Button(buttonText, ImVec2(200, 30)))
+            {
+                if (!twitchAuth.IsAuthenticated()) {
+                    // Not authenticated - start OAuth flow (will auto-connect after)
+                    twitchAuth.StartAuthentication();
+                }
+                else if (!isConnected && !isConnecting) {
+                    // Authenticated but not connected - reconnect to user's channel
+                    twitchAuth.Connect(twitchAuth.GetUsername());
+                }
+            }
+
+            ImGui::Spacing();
+
+            // Status display with icon
+            ImGui::Text("Status - ");
+            ImGui::SameLine();
+
+            // Display connection status icon
+            ConnectionStatus status = twitchAuth.GetStatus();
+            ID3D11ShaderResourceView* statusIcon = nullptr;
+
+            if (status == ConnectionStatus::Connected) {
+                statusIcon = g_iconConnected;
+            }
+            else {
+                statusIcon = g_iconNoNetwork;
+            }
+
+            // Display icon if loaded
+            if (statusIcon != nullptr) {
+                ImGui::Image((void*)statusIcon, ImVec2(32, 32));
+            }
+            else {
+                // Fallback to text if icons aren't loaded
+                if (status == ConnectionStatus::Connected) {
+                    ImGui::Text("[CONNECTED]");
+                }
+                else {
+                    ImGui::Text("[NOT CONNECTED]");
+                }
+            }
+
+            ImGui::SameLine();
+            ImGui::Text("%s", twitchAuth.GetStatusMessage().c_str());
         }
 
         ImGui::EndChild(); // TabContent
@@ -711,6 +900,9 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
     }
 
     // Cleanup
+    if (g_iconNoNetwork) { g_iconNoNetwork->Release(); g_iconNoNetwork = nullptr; }
+    if (g_iconConnected) { g_iconConnected->Release(); g_iconConnected = nullptr; }
+
     ImGui_ImplDX11_Shutdown();
     ImGui_ImplWin32_Shutdown();
     ImGui::DestroyContext();

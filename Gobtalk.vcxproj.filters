@@ -42,6 +42,9 @@
     <ClCompile Include="imgui\imgui.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="Twitchauth.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <Image Include="Mondern Win98.ico">
@@ -79,6 +82,12 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="include\ttsapi.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Twitchauth.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="DECtalkWrapper.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
