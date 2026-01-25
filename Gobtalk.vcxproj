@@ -139,6 +139,8 @@
     <ClCompile Include="imgui_widgets.cpp" />
     <ClCompile Include="main.cpp" />
     <ClCompile Include="Twitchauth.cpp" />
+    <ClCompile Include="Twitcheventsub.cpp" />
+    <ClCompile Include="Twitchmessagehandler.cpp" />
   </ItemGroup>
   <ItemGroup>
     <Image Include="Mondern Win98.ico" />
@@ -158,6 +160,8 @@
     <ClInclude Include="Resource.h" />
     <ClInclude Include="targetver.h" />
     <ClInclude Include="Twitchauth.h" />
+    <ClInclude Include="Twitcheventsub.h" />
+    <ClInclude Include="Twitchmessagehandler.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

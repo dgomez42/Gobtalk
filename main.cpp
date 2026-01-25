@@ -1,8 +1,10 @@
-#define NOMINMAX
+﻿#define NOMINMAX
 #include <WinSock2.h>
 #include <WS2tcpip.h>
 #include "DECtalkWrapper.h"
 #include "Twitchauth.h"
+#include "TwitchMessageHandler.h"
+#include "TwitchEventSub.h"
 #include "imgui.h"
 #include "imgui_impl_win32.h"
 #include "imgui_impl_dx11.h"
@@ -13,6 +15,7 @@
 #include <iostream>
 #include <thread>
 #include <chrono>
+#include <memory>
 
 #pragma comment(lib, "dwmapi.lib")
 #pragma comment(lib, "ws2_32.lib")
@@ -42,6 +45,12 @@ DECtalkWrapper dectalk;
 // Twitch instance
 TwitchAuth twitchAuth;
 
+// Twitch EventSub instance
+TwitchEventSub eventSub;
+
+// Message handler instance (created after DECtalk initialization)
+std::unique_ptr<TwitchMessageHandler> messageHandler;
+
 // Icon textures for connection status
 ID3D11ShaderResourceView* g_iconNoNetwork = nullptr;
 ID3D11ShaderResourceView* g_iconConnected = nullptr;
@@ -51,6 +60,7 @@ static int selectedVoice = 0;
 static const char* voiceNames[] = { "Paul", "Betty", "Harry", "Frank", "Dennis", "Kit", "Ursula", "Rita", "Wendy" };
 static int volume = 100;
 static char textBuffer[1024] = "Hello, I am DECtalk.";
+static char channelPointRewardName[256] = "";  // Filter for channel point redemptions
 
 // Window state
 static bool isMaximized = false;
@@ -313,6 +323,78 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
         MessageBoxA(nullptr, "Failed to initialize DECtalk!\n\nMake sure dectalk.dll is in the same folder as the .exe", "Error", MB_OK | MB_ICONERROR);
         return 1;
     }
+
+    // Initialize message handler
+    std::cout << "[Startup] Initializing message handler..." << std::endl;
+    messageHandler = std::make_unique<TwitchMessageHandler>(dectalk);
+    messageHandler->SetTwitchAuth(&twitchAuth);
+
+    // Set up callbacks from TwitchAuth to message handler
+    twitchAuth.SetOnRawMessageCallback([](const std::string& rawMsg) {
+        if (messageHandler) {
+            messageHandler->OnRawIRCMessage(rawMsg);
+        }
+        });
+
+    // Set up EventSub follower callback
+    eventSub.SetOnFollowCallback([](const std::string& username) {
+        if (messageHandler) {
+            messageHandler->OnNewFollower(username);
+        }
+        });
+
+    // Set up EventSub channel point redemption callback
+    eventSub.SetOnChannelPointRedemptionCallback([](const std::string& username, const std::string& rewardTitle, const std::string& userInput) {
+        if (messageHandler && messageHandler->enableChannelPointRedeems) {
+            // Only read if there's a message
+            if (!userInput.empty()) {
+                std::string message;
+
+                // Respect the "Read Username" toggle
+                if (messageHandler->readUsername) {
+                    message = username + " says: " + userInput;
+                }
+                else {
+                    message = userInput;
+                }
+
+                std::cout << "[Main] Channel point TTS: " << message << std::endl;
+                dectalk.Speak(message);
+            }
+        }
+        });
+
+    // Set up status callback to connect EventSub when Twitch connects
+    twitchAuth.SetOnStatusCallback([](ConnectionStatus status, const std::string& message) {
+        if (status == ConnectionStatus::Connected) {
+            std::cout << "[Main] Twitch connected, starting EventSub..." << std::endl;
+
+            // Set EventSub credentials
+            eventSub.SetCredentials(
+                twitchAuth.GetClientId(),
+                twitchAuth.GetUserId(),
+                twitchAuth.GetAccessToken()
+            );
+
+            // Connect EventSub in a separate thread
+            std::thread([]() {
+                if (eventSub.Connect()) {
+                    std::cout << "[Main] EventSub connected successfully" << std::endl;
+                }
+                else {
+                    std::cout << "[Main] EventSub connection failed" << std::endl;
+                }
+                }).detach();
+        }
+        else if (status == ConnectionStatus::Error) {
+            std::cout << "[Main] Twitch connection error: " << message << std::endl;
+            // Don't try to connect EventSub if IRC failed
+        }
+        });
+
+    // Start the message handler
+    messageHandler->Start();
+    std::cout << "[Startup] Message handler started" << std::endl;
 
     // Create borderless application window
     WNDCLASSEXW wc = { sizeof(wc), CS_CLASSDC, WndProc, 0L, 0L, hInstance, nullptr, nullptr,
@@ -666,7 +748,7 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
 
         // STEP 4: Tab Bar (Win98 paper-tab style)
         static int selectedTab = 0;
-        const char* tabNames[] = { "Voice Settings", "Connections" };
+        const char* tabNames[] = { "Voice Settings", "Options", "Connections" };
         float tabBarY = menuBarY + menuBarHeight;
         ImVec2 tabBarMin = ImVec2(outerBorderWidth, tabBarY);
 
@@ -819,66 +901,427 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
                 dectalk.Speak(textBuffer);
             }
         }
-        else if (selectedTab == 1) {
+        else if (selectedTab == 2) {
             // Connections tab content
             ImGui::Text("Twitch Connection");
             ImGui::Separator();
             ImGui::Spacing();
 
-            // Connect button
+            // Get current status
             ConnectionStatus currentStatus = twitchAuth.GetStatus();
             bool isConnected = (currentStatus == ConnectionStatus::Connected);
             bool isConnecting = (currentStatus == ConnectionStatus::Connecting);
+            bool isError = (currentStatus == ConnectionStatus::Error);
+            bool isDisconnected = (currentStatus == ConnectionStatus::Disconnected);
 
+            // Check if disconnect is in progress via atomic flag
+            bool disconnecting = twitchAuth.IsDisconnecting() || eventSub.IsDisconnecting();
+
+            // ========== IRC CONNECTION STATUS ==========
+            ImGui::Text("IRC Status:");
+            ImGui::SameLine();
+
+            // Color-coded status indicator
+            if (isConnected) {
+                ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "● CONNECTED");
+            }
+            else if (isConnecting) {
+                ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "● CONNECTING...");
+            }
+            else if (isError) {
+                ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "● ERROR");
+            }
+            else if (disconnecting) {
+                ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "● DISCONNECTING...");
+            }
+            else {
+                ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "● DISCONNECTED");
+            }
+
+            // Status message
+            ImGui::Indent(20);
+            std::string statusMsg = twitchAuth.GetStatusMessage();
+            if (!statusMsg.empty()) {
+                if (isError) {
+                    ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s", statusMsg.c_str());
+                }
+                else if (isConnected) {
+                    ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "%s", statusMsg.c_str());
+                }
+                else {
+                    ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "%s", statusMsg.c_str());
+                }
+            }
+            ImGui::Unindent(20);
+
+            ImGui::Spacing();
+
+            // ========== EVENTSUB STATUS ==========
+            ImGui::Text("EventSub Status:");
+            ImGui::SameLine();
+
+            bool eventSubConnected = eventSub.IsConnected();
+            if (isConnected && eventSubConnected) {
+                ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "● CONNECTED");
+            }
+            else if (isConnected && !eventSubConnected) {
+                ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "● CONNECTING...");
+            }
+            else if (disconnecting) {
+                ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "● DISCONNECTING...");
+            }
+            else {
+                ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "● DISCONNECTED");
+            }
+
+            ImGui::Indent(20);
+            if (isConnected && eventSubConnected) {
+                ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "Real-time follower notifications active");
+            }
+            else if (isConnected && !eventSubConnected) {
+                ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.0f, 1.0f), "Attempting WebSocket connection...");
+            }
+            else {
+                ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "Not connected");
+            }
+            ImGui::Unindent(20);
+
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+
+            // ========== CONNECT BUTTON ==========
             const char* buttonText = isConnected ? "Connected to Twitch" :
                 isConnecting ? "Connecting..." :
                 "Connect To Twitch";
 
-            if (Win98Button(buttonText, ImVec2(200, 30)))
+            // Disable button while connecting or disconnecting
+            bool buttonEnabled = !isConnecting && !disconnecting;
+            if (!buttonEnabled) {
+                ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.6f);
+            }
+
+            if (Win98Button(buttonText, ImVec2(200, 30)) && buttonEnabled)
             {
                 if (!twitchAuth.IsAuthenticated()) {
                     // Not authenticated - start OAuth flow (will auto-connect after)
+                    std::cout << "[UI] Starting authentication flow..." << std::endl;
                     twitchAuth.StartAuthentication();
                 }
                 else if (!isConnected && !isConnecting) {
                     // Authenticated but not connected - reconnect to user's channel
+                    std::cout << "[UI] Initiating connection to channel: " << twitchAuth.GetUsername() << std::endl;
                     twitchAuth.Connect(twitchAuth.GetUsername());
+                }
+            }
+
+            if (!buttonEnabled) {
+                ImGui::PopStyleVar();
+            }
+
+            if (ImGui::IsItemHovered()) {
+                if (isConnected) {
+                    ImGui::SetTooltip("Already connected to Twitch IRC");
+                }
+                else if (isConnecting) {
+                    ImGui::SetTooltip("Connection in progress, please wait...");
+                }
+                else if (disconnecting) {
+                    ImGui::SetTooltip("Disconnection in progress, please wait...");
+                }
+                else {
+                    ImGui::SetTooltip("Click to authenticate and connect to Twitch");
                 }
             }
 
             ImGui::Spacing();
 
-            // Status display with icon
-            ImGui::Text("Status - ");
-            ImGui::SameLine();
-
-            // Display connection status icon
-            ConnectionStatus status = twitchAuth.GetStatus();
-            ID3D11ShaderResourceView* statusIcon = nullptr;
-
-            if (status == ConnectionStatus::Connected) {
-                statusIcon = g_iconConnected;
-            }
-            else {
-                statusIcon = g_iconNoNetwork;
-            }
-
-            // Display icon if loaded
-            if (statusIcon != nullptr) {
-                ImGui::Image((void*)statusIcon, ImVec2(32, 32));
-            }
-            else {
-                // Fallback to text if icons aren't loaded
-                if (status == ConnectionStatus::Connected) {
-                    ImGui::Text("[CONNECTED]");
+            // ========== DISCONNECT BUTTON ==========
+            if (twitchAuth.IsAuthenticated()) {
+                bool disconnectEnabled = !disconnecting && !isConnecting;
+                if (!disconnectEnabled) {
+                    ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.6f);
                 }
-                else {
-                    ImGui::Text("[NOT CONNECTED]");
+
+                if (Win98Button("Disconnect & Clear Credentials", ImVec2(200, 30)) && disconnectEnabled) {
+                    std::cout << "[UI] ========================================" << std::endl;
+                    std::cout << "[UI] Starting disconnect and credential clear..." << std::endl;
+                    std::cout << "[UI] ========================================" << std::endl;
+
+                    // Do disconnect in separate thread to avoid blocking UI
+                    std::thread([]() {
+                        std::cout << "[Disconnect] Step 1/3: Disconnecting from Twitch IRC..." << std::endl;
+                        twitchAuth.Disconnect();
+                        std::cout << "[Disconnect] Step 1/3: Complete ✓" << std::endl;
+
+                        std::cout << "[Disconnect] Step 2/3: Disconnecting from EventSub..." << std::endl;
+                        eventSub.Disconnect();
+                        std::cout << "[Disconnect] Step 2/3: Complete ✓" << std::endl;
+
+                        std::cout << "[Disconnect] Step 3/3: Revoking credentials..." << std::endl;
+                        twitchAuth.RevokeAuthentication();
+                        std::cout << "[Disconnect] Step 3/3: Complete ✓" << std::endl;
+
+                        std::cout << "[UI] ========================================" << std::endl;
+                        std::cout << "[UI] Disconnect complete!" << std::endl;
+                        std::cout << "[UI] Click 'Connect To Twitch' to re-authenticate" << std::endl;
+                        std::cout << "[UI] ========================================" << std::endl;
+                        }).detach();
+                }
+
+                if (!disconnectEnabled) {
+                    ImGui::PopStyleVar();
+                }
+
+                if (ImGui::IsItemHovered()) {
+                    if (disconnecting) {
+                        ImGui::SetTooltip("Disconnection in progress, please wait...");
+                    }
+                    else if (isConnecting) {
+                        ImGui::SetTooltip("Cannot disconnect while connecting");
+                    }
+                    else {
+                        ImGui::SetTooltip("Disconnect and clear saved credentials.\nUse this to re-authenticate or fix OAuth issues.");
+                    }
                 }
             }
 
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+
+            // ========== CONNECTION INFO ==========
+            if (twitchAuth.IsAuthenticated()) {
+                ImGui::Text("Account Info:");
+                ImGui::Indent(20);
+                ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "Username: %s", twitchAuth.GetUsername().c_str());
+                ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "User ID: %s", twitchAuth.GetUserId().c_str());
+                ImGui::Unindent(20);
+            }
+        }
+        else if (selectedTab == 1) {
+            // Options tab content
+            ImGui::Text("TTS Feature Toggles");
+            ImGui::Separator();
+            ImGui::Spacing();
+
+            // Chat Messages and !say Command on same line
+            ImGui::Checkbox("Read Chat Messages", &messageHandler->enableChatMessages);
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Must be ON for the bot to process chat messages and !say commands");
+            }
+
+            ImGui::SameLine(250); // Position to the right
+
+            // Grey out everything below if Read Chat Messages is OFF
+            if (!messageHandler->enableChatMessages) {
+                ImGui::BeginDisabled();
+            }
+
+            ImGui::Checkbox("Require !say Command", &messageHandler->enableSayCommand);
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("When ON: Users MUST use !say to have messages read\nWhen OFF: All messages are read normally");
+            }
+
+            ImGui::Spacing();
+
+            // Read Username toggle
+            ImGui::Checkbox("Read Username", &messageHandler->readUsername);
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("When ON: Says \"Username says: message\" (for all messages including !say)\nWhen OFF: Just says the message");
+            }
+
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+
+            // Role Filtering
+            ImGui::Text("Role Filtering");
+            ImGui::Spacing();
+
+            // Dropdown for role filter mode
+            static int roleFilterSelection = 0; // 0 = Everyone, 1 = Custom
+            const char* roleFilterOptions[] = { "Everyone", "Custom" };
+
+            ImGui::Text("Read messages from:");
             ImGui::SameLine();
-            ImGui::Text("%s", twitchAuth.GetStatusMessage().c_str());
+            ImGui::SetNextItemWidth(150);
+            if (ImGui::Combo("##rolefilter", &roleFilterSelection, roleFilterOptions, IM_ARRAYSIZE(roleFilterOptions))) {
+                messageHandler->roleFilterMode = (roleFilterSelection == 0) ?
+                    TwitchMessageHandler::RoleFilterMode::Everyone :
+                    TwitchMessageHandler::RoleFilterMode::Custom;
+            }
+
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Everyone: Read all messages\nCustom: Only read from selected roles");
+            }
+
+            // Always show role checkboxes (grey them out instead of hiding)
+            ImGui::Spacing();
+            ImGui::Indent(20);
+
+            ImGui::Text("Allow messages from:");
+            ImGui::Spacing();
+
+            // Disable role checkboxes when "Everyone" is selected
+            if (roleFilterSelection == 0) {
+                ImGui::BeginDisabled();
+            }
+
+            ImGui::Checkbox("Followers", &messageHandler->allowFollowers);
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Allow messages from followers (currently allows everyone - EventSub needed)");
+            }
+
+            ImGui::Checkbox("Subscribers", &messageHandler->allowSubscribers);
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Allow messages from channel subscribers");
+            }
+
+            ImGui::Checkbox("Turbo Users", &messageHandler->allowTurbo);
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Allow messages from Twitch Turbo users");
+            }
+
+            ImGui::Checkbox("Moderators", &messageHandler->allowMods);
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Allow messages from channel moderators");
+            }
+
+            ImGui::Checkbox("VIPs", &messageHandler->allowVIPs);
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Allow messages from channel VIPs");
+            }
+
+            // End role checkbox disabled state
+            if (roleFilterSelection == 0) {
+                ImGui::EndDisabled();
+            }
+
+            ImGui::Unindent(20);
+
+            // End "Read Chat Messages" disabled state
+            if (!messageHandler->enableChatMessages) {
+                ImGui::EndDisabled();
+            }
+
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+
+            // Announcements
+            ImGui::Text("Announcements");
+            ImGui::Spacing();
+
+            // Subscriber Announcements
+            ImGui::Checkbox("New Subscribers", &messageHandler->enableSubscriberAnnouncements);
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Announce new subscriptions and resubscriptions");
+            }
+
+            if (messageHandler->enableSubscriberAnnouncements) {
+                ImGui::Indent(20);
+                ImGui::Text("Subscription Message:");
+                ImGui::SetNextItemWidth(-1); // Full width
+                char subBuffer[256];
+                strncpy_s(subBuffer, messageHandler->subscriberMessage.c_str(), sizeof(subBuffer) - 1);
+                if (ImGui::InputText("##submsg", subBuffer, sizeof(subBuffer))) {
+                    messageHandler->subscriberMessage = subBuffer;
+                }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("Use {username} as placeholder. Example: {username} just subscribed!");
+                }
+
+                ImGui::Text("Resubscription Message:");
+                ImGui::SetNextItemWidth(-1); // Full width
+                char resubBuffer[256];
+                strncpy_s(resubBuffer, messageHandler->resubscriberMessage.c_str(), sizeof(resubBuffer) - 1);
+                if (ImGui::InputText("##resubmsg", resubBuffer, sizeof(resubBuffer))) {
+                    messageHandler->resubscriberMessage = resubBuffer;
+                }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("Use {username} and {months} as placeholders. Example: {username} resubscribed for {months} months!");
+                }
+                ImGui::Unindent(20);
+            }
+
+            ImGui::Spacing();
+
+            // Follower Announcements
+            ImGui::Checkbox("Follower Announcements", &messageHandler->enableFollowerAnnouncements);
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Announce new followers via Twitch EventSub WebSocket");
+            }
+            if (messageHandler->enableFollowerAnnouncements) {
+                ImGui::Indent(20);
+                ImGui::Text("Follower Message:");
+                ImGui::SetNextItemWidth(-1); // Full width
+                char followerBuffer[256];
+                strncpy_s(followerBuffer, messageHandler->followerMessage.c_str(), sizeof(followerBuffer) - 1);
+                if (ImGui::InputText("##followmsg", followerBuffer, sizeof(followerBuffer))) {
+                    messageHandler->followerMessage = followerBuffer;
+                }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("Use {username} as placeholder. Example: {username} just followed!");
+                }
+                ImGui::Unindent(20);
+            }
+
+            ImGui::Spacing();
+
+            // Bits Announcements
+            ImGui::Checkbox("Bits/Cheers", &messageHandler->enableBitsAnnouncements);
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Announce bit cheers");
+            }
+
+            if (messageHandler->enableBitsAnnouncements) {
+                ImGui::Text("  Minimum Bits:");
+                ImGui::SameLine(150);
+                ImGui::SetNextItemWidth(100);
+                ImGui::InputInt("##minbits", &messageHandler->minBitsToAnnounce, 1, 10);
+                if (messageHandler->minBitsToAnnounce < 1) messageHandler->minBitsToAnnounce = 1;
+            }
+
+            ImGui::Spacing();
+
+            // Channel Point Redeems
+            ImGui::Checkbox("Channel Point Redeems", &messageHandler->enableChannelPointRedeems);
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Read messages from specific channel point reward redemptions");
+            }
+
+            if (messageHandler->enableChannelPointRedeems) {
+                ImGui::Indent(20);
+                ImGui::Text("Reward Name:");
+                ImGui::SetNextItemWidth(-1); // Full width
+                if (ImGui::InputText("##rewardname", channelPointRewardName, sizeof(channelPointRewardName))) {
+                    // Update EventSub filter when text changes
+                    eventSub.SetRewardNameFilter(channelPointRewardName);
+                }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("Enter the exact name of the reward to listen for (case-sensitive).\nWhen this reward is redeemed, the TTS will read the user's message.");
+                }
+                ImGui::Unindent(20);
+            }
+
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+
+            // Future features
+            ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "Future Features:");
+            ImGui::Spacing();
+
+            bool donationsEnabled = false; // Placeholder
+            ImGui::BeginDisabled();
+            ImGui::Checkbox("Donations", &donationsEnabled);
+            ImGui::EndDisabled();
+            ImGui::SameLine();
+            ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "(Coming Soon)");
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Announce donations (requires external service integration)");
+            }
         }
 
         ImGui::EndChild(); // TabContent

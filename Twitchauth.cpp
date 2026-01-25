@@ -28,6 +28,8 @@ TwitchAuth::TwitchAuth()
     , m_socket(INVALID_SOCKET)
     , m_serverSocket(INVALID_SOCKET)
     , m_serverRunning(false)
+    , m_followerPolling(false)
+    , m_disconnecting(false)
 {
     // Initialize WinSock
     WSADATA wsaData;
@@ -41,6 +43,7 @@ TwitchAuth::~TwitchAuth()
 {
     Disconnect();
     StopLocalServer();
+    StopFollowerPolling();
     WSACleanup();
 }
 
@@ -60,13 +63,15 @@ bool TwitchAuth::LoadUserConfig()
 
     std::cout << "[TwitchAuth] Config content: " << content << std::endl;
 
+    std::string parsedUserId, parsedUsername;
+
     // Parse "user_id": "value"
     size_t userIdPos = content.find("\"user_id\"");
     if (userIdPos != std::string::npos) {
         size_t valueStart = content.find("\"", userIdPos + 10);
         size_t valueEnd = content.find("\"", valueStart + 1);
         if (valueStart != std::string::npos && valueEnd != std::string::npos) {
-            m_userId = content.substr(valueStart + 1, valueEnd - valueStart - 1);
+            parsedUserId = content.substr(valueStart + 1, valueEnd - valueStart - 1);
         }
     }
 
@@ -76,16 +81,29 @@ bool TwitchAuth::LoadUserConfig()
         size_t valueStart = content.find("\"", usernamePos + 11);
         size_t valueEnd = content.find("\"", valueStart + 1);
         if (valueStart != std::string::npos && valueEnd != std::string::npos) {
-            m_username = content.substr(valueStart + 1, valueEnd - valueStart - 1);
+            parsedUsername = content.substr(valueStart + 1, valueEnd - valueStart - 1);
         }
     }
 
-    std::cout << "[TwitchAuth] Loaded user_id: " << m_userId << ", username: " << m_username << std::endl;
-    return !m_userId.empty();
+    {
+        std::lock_guard<std::mutex> lock(m_authMutex);
+        m_userId = parsedUserId;
+        m_username = parsedUsername;
+    }
+
+    std::cout << "[TwitchAuth] Loaded user_id: " << parsedUserId << ", username: " << parsedUsername << std::endl;
+    return !parsedUserId.empty();
 }
 
 bool TwitchAuth::SaveUserConfig()
 {
+    std::string userId, username;
+    {
+        std::lock_guard<std::mutex> lock(m_authMutex);
+        userId = m_userId;
+        username = m_username;
+    }
+
     std::ofstream file(USER_CONFIG_FILE);
     if (!file.is_open()) {
         return false;
@@ -93,8 +111,8 @@ bool TwitchAuth::SaveUserConfig()
 
     // Write simple JSON
     file << "{\n";
-    file << "  \"user_id\": \"" << m_userId << "\",\n";
-    file << "  \"username\": \"" << m_username << "\"\n";
+    file << "  \"user_id\": \"" << userId << "\",\n";
+    file << "  \"username\": \"" << username << "\"\n";
     file << "}\n";
 
     file.close();
@@ -103,6 +121,7 @@ bool TwitchAuth::SaveUserConfig()
 
 bool TwitchAuth::IsAuthenticated() const
 {
+    std::lock_guard<std::mutex> lock(m_authMutex);
     return !m_userId.empty();
 }
 
@@ -129,7 +148,8 @@ bool TwitchAuth::StartAuthentication()
     // Open browser
     ShellExecuteA(nullptr, "open", url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
 
-    SetStatus(ConnectionStatus::Connecting, "Waiting for authorization...");
+    // Don't set status to Connecting here - we're just doing OAuth, not connecting to IRC yet
+    // The actual Connect() call will set status to Connecting when it starts
     return true;
 }
 
@@ -244,14 +264,16 @@ void TwitchAuth::ServerLoop()
                     std::string body = request.substr(bodyStart + 4);
                     std::cout << "[TwitchAuth] Callback body: " << body << std::endl;
 
+                    std::string parsedUserId, parsedUsername;
+
                     // Parse JSON for user_id and user_login
                     size_t userIdPos = body.find("\"user_id\"");
                     if (userIdPos != std::string::npos) {
                         size_t valueStart = body.find("\"", userIdPos + 10);
                         size_t valueEnd = body.find("\"", valueStart + 1);
                         if (valueStart != std::string::npos && valueEnd != std::string::npos) {
-                            m_userId = body.substr(valueStart + 1, valueEnd - valueStart - 1);
-                            std::cout << "[TwitchAuth] Parsed user_id: " << m_userId << std::endl;
+                            parsedUserId = body.substr(valueStart + 1, valueEnd - valueStart - 1);
+                            std::cout << "[TwitchAuth] Parsed user_id: " << parsedUserId << std::endl;
                         }
                     }
 
@@ -260,19 +282,30 @@ void TwitchAuth::ServerLoop()
                         size_t valueStart = body.find("\"", loginPos + 13);
                         size_t valueEnd = body.find("\"", valueStart + 1);
                         if (valueStart != std::string::npos && valueEnd != std::string::npos) {
-                            m_username = body.substr(valueStart + 1, valueEnd - valueStart - 1);
-                            std::cout << "[TwitchAuth] Parsed username: " << m_username << std::endl;
+                            parsedUsername = body.substr(valueStart + 1, valueEnd - valueStart - 1);
+                            std::cout << "[TwitchAuth] Parsed username: " << parsedUsername << std::endl;
+                        }
+                    }
+
+                    // Save credentials atomically
+                    bool shouldSave = false;
+                    {
+                        std::lock_guard<std::mutex> lock(m_authMutex);
+                        if (!parsedUserId.empty()) {
+                            m_userId = parsedUserId;
+                            m_username = parsedUsername;
+                            shouldSave = true;
                         }
                     }
 
                     // Save config
-                    if (!m_userId.empty()) {
+                    if (shouldSave) {
                         SaveUserConfig();
                         std::cout << "[TwitchAuth] Config saved, starting auto-connect..." << std::endl;
 
                         // Automatically connect to user's channel after authentication
                         std::thread([this]() {
-                            std::this_thread::sleep_for(std::chrono::milliseconds(500)); // Brief delay
+                            std::this_thread::sleep_for(std::chrono::milliseconds(1000)); // Give UI time to update
                             std::cout << "[TwitchAuth] Auto-connecting to channel: " << m_username << std::endl;
                             Connect(m_username); // Connect to user's own channel
                             }).detach();
@@ -296,13 +329,18 @@ void TwitchAuth::ServerLoop()
 
 std::string TwitchAuth::GetAccessToken()
 {
-    if (m_userId.empty()) {
-        return "";
+    std::string userId;
+    {
+        std::lock_guard<std::mutex> lock(m_authMutex);
+        if (m_userId.empty()) {
+            return "";
+        }
+        userId = m_userId;  // Copy under lock
     }
 
     // Call worker API to get valid token
     std::stringstream ss;
-    ss << m_workerUrl << "/api/get-token?user_id=" << m_userId;
+    ss << m_workerUrl << "/api/get-token?user_id=" << userId;
 
     std::string response = HttpGet(ss.str());
 
@@ -325,28 +363,111 @@ std::string TwitchAuth::GetAccessToken()
 
 void TwitchAuth::RevokeAuthentication()
 {
-    if (m_userId.empty()) {
-        return;
+    std::string userIdToRevoke;
+    std::string workerUrlCopy = m_workerUrl;
+
+    {
+        std::lock_guard<std::mutex> lock(m_authMutex);
+        if (m_userId.empty()) {
+            return;
+        }
+
+        std::cout << "[TwitchAuth] Clearing local credentials..." << std::endl;
+
+        // Save user_id for async revoke (if we wanted to revoke on worker)
+        userIdToRevoke = m_userId;
+
+        // Clear local config immediately (fast)
+        m_userId.clear();
+        m_username.clear();
     }
 
-    // Call worker API to revoke
-    std::stringstream ss;
-    ss << m_workerUrl << "/api/revoke?user_id=" << m_userId;
-    HttpGet(ss.str());
-
-    // Clear local config
-    m_userId.clear();
-    m_username.clear();
     SaveUserConfig();
+
+    std::cout << "[TwitchAuth] Local credentials cleared" << std::endl;
+
+    // NOTE: We don't actually revoke the token on the worker because:
+    // 1. It expires automatically after a while anyway
+    // 2. Async revoke can race with re-authentication (user disconnects, reconnects fast,
+    //    gets new token with same user_id, then old revoke completes and deletes new token!)
+    // 3. User might want to reconnect immediately without re-authenticating
+    //
+    // If you really want to revoke tokens, uncomment this code:
+
+    /*
+    std::thread([userIdToRevoke, workerUrlCopy]() {
+        std::cout << "[TwitchAuth] Revoking token on worker API..." << std::endl;
+
+        // Build URL
+        std::stringstream ss;
+        ss << workerUrlCopy << "/api/revoke?user_id=" << userIdToRevoke;
+        std::string url = ss.str();
+
+        // Parse URL for WinHTTP
+        size_t schemeEnd = url.find("://");
+        size_t hostStart = schemeEnd + 3;
+        size_t pathStart = url.find('/', hostStart);
+
+        std::wstring host(url.begin() + hostStart, url.begin() + pathStart);
+        std::wstring path(url.begin() + pathStart, url.end());
+
+        // Make HTTP request
+        HINTERNET hSession = WinHttpOpen(L"GobTalk/1.0",
+            WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+            WINHTTP_NO_PROXY_NAME,
+            WINHTTP_NO_PROXY_BYPASS, 0);
+
+        if (hSession) {
+            HINTERNET hConnect = WinHttpConnect(hSession, host.c_str(),
+                INTERNET_DEFAULT_HTTPS_PORT, 0);
+
+            if (hConnect) {
+                HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"GET", path.c_str(),
+                    nullptr, WINHTTP_NO_REFERER,
+                    WINHTTP_DEFAULT_ACCEPT_TYPES,
+                    WINHTTP_FLAG_SECURE);
+
+                if (hRequest) {
+                    WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
+                        WINHTTP_NO_REQUEST_DATA, 0, 0, 0);
+                    WinHttpReceiveResponse(hRequest, nullptr);
+                    WinHttpCloseHandle(hRequest);
+                }
+                WinHttpCloseHandle(hConnect);
+            }
+            WinHttpCloseHandle(hSession);
+        }
+
+        std::cout << "[TwitchAuth] Worker API revoke complete" << std::endl;
+    }).detach();
+    */
 }
 
 bool TwitchAuth::Connect(const std::string& channel)
 {
     std::cout << "[TwitchAuth] Connect called for channel: " << channel << std::endl;
 
-    if (m_status == ConnectionStatus::Connected) {
+    if (GetStatus() == ConnectionStatus::Connected) {
         std::cout << "[TwitchAuth] Already connected" << std::endl;
         return true;
+    }
+
+    if (GetStatus() == ConnectionStatus::Connecting) {
+        // If m_channel is empty, we're just waiting for OAuth (not actually connecting to IRC yet)
+        // So allow this connection to proceed
+        if (m_channel.empty()) {
+            std::cout << "[TwitchAuth] Status is Connecting but no channel set yet (OAuth flow), proceeding..." << std::endl;
+        }
+        // If we're already connecting to the same channel, that's fine - just return true
+        else if (m_channel == channel) {
+            std::cout << "[TwitchAuth] Already connecting to " << channel << ", request ignored" << std::endl;
+            return true;
+        }
+        // Different channel while connecting - block this
+        else {
+            std::cout << "[TwitchAuth] Already connecting to different channel, please wait..." << std::endl;
+            return false;
+        }
     }
 
     if (!IsAuthenticated()) {
@@ -379,6 +500,8 @@ bool TwitchAuth::Connect(const std::string& channel)
 
     // Connect to Twitch IRC
     std::cout << "[TwitchAuth] Resolving irc.chat.twitch.tv:6667..." << std::endl;
+    SetStatus(ConnectionStatus::Connecting, "Resolving server address...");
+
     struct addrinfo hints = {}, * result = nullptr;
     hints.ai_family = AF_INET;
     hints.ai_socktype = SOCK_STREAM;
@@ -393,6 +516,8 @@ bool TwitchAuth::Connect(const std::string& channel)
     std::cout << "[TwitchAuth] DNS resolved successfully" << std::endl;
 
     std::cout << "[TwitchAuth] Connecting to IRC server..." << std::endl;
+    SetStatus(ConnectionStatus::Connecting, "Connecting to IRC server...");
+
     if (connect(m_socket, result->ai_addr, (int)result->ai_addrlen) == SOCKET_ERROR) {
         std::cout << "[TwitchAuth] Failed to connect to Twitch IRC! Error: " << WSAGetLastError() << std::endl;
         freeaddrinfo(result);
@@ -406,6 +531,8 @@ bool TwitchAuth::Connect(const std::string& channel)
 
     // Send authentication
     std::cout << "[TwitchAuth] Sending authentication..." << std::endl;
+    SetStatus(ConnectionStatus::Connecting, "Authenticating...");
+
     std::stringstream ss;
     ss << "PASS oauth:" << token << "\r\n";
     ss << "NICK " << m_username << "\r\n";
@@ -413,16 +540,28 @@ bool TwitchAuth::Connect(const std::string& channel)
 
     // Request capabilities
     std::cout << "[TwitchAuth] Requesting capabilities..." << std::endl;
+    SetStatus(ConnectionStatus::Connecting, "Requesting capabilities...");
+
     std::string caps = "CAP REQ :twitch.tv/membership twitch.tv/tags twitch.tv/commands\r\n";
     send(m_socket, caps.c_str(), (int)caps.length(), 0);
 
     // Join channel
     std::cout << "[TwitchAuth] Joining channel #" << m_channel << "..." << std::endl;
+    SetStatus(ConnectionStatus::Connecting, "Joining channel #" + m_channel + "...");
+
     std::string join = "JOIN #" + m_channel + "\r\n";
     send(m_socket, join.c_str(), (int)join.length(), 0);
 
     // Start receive thread
     std::cout << "[TwitchAuth] Starting receive thread..." << std::endl;
+
+    // Join old thread if it exists
+    if (m_receiveThread.joinable()) {
+        std::cout << "[TwitchAuth] Joining old receive thread..." << std::endl;
+        m_running = false;
+        m_receiveThread.join();
+    }
+
     m_running = true;
     m_receiveThread = std::thread(&TwitchAuth::ReceiveLoop, this);
 
@@ -433,23 +572,46 @@ bool TwitchAuth::Connect(const std::string& channel)
 
 void TwitchAuth::Disconnect()
 {
-    if (m_status == ConnectionStatus::Disconnected) {
+    // Atomic check-and-set to prevent concurrent disconnects
+    bool expected = false;
+    if (!m_disconnecting.compare_exchange_strong(expected, true)) {
+        std::cout << "[TwitchAuth] Disconnect already in progress by another thread, ignoring" << std::endl;
         return;
     }
 
-    m_running = false;
-
-    if (m_receiveThread.joinable()) {
-        m_receiveThread.join();
+    if (GetStatus() == ConnectionStatus::Disconnected) {
+        std::cout << "[TwitchAuth] Already disconnected" << std::endl;
+        m_disconnecting = false;
+        return;
     }
 
+    std::cout << "[TwitchAuth] Disconnecting..." << std::endl;
+
+    // Set status immediately
+    SetStatus(ConnectionStatus::Disconnected, "Disconnecting...");
+
+    m_running = false;
+
+    // IMPORTANT: Close socket FIRST to unblock recv() immediately
+    // This makes the receive thread exit instantly instead of waiting for timeout
     CleanupSocket();
+
+    // Now join the thread (will be fast since socket is closed)
+    if (m_receiveThread.joinable()) {
+        std::cout << "[TwitchAuth] Joining receive thread..." << std::endl;
+        m_receiveThread.join();
+        std::cout << "[TwitchAuth] Receive thread joined" << std::endl;
+    }
+
     SetStatus(ConnectionStatus::Disconnected, "Disconnected from Twitch");
+    std::cout << "[TwitchAuth] Disconnect complete" << std::endl;
+
+    m_disconnecting = false;  // Reset flag
 }
 
 bool TwitchAuth::SendMessage(const std::string& message)
 {
-    if (m_status != ConnectionStatus::Connected) {
+    if (GetStatus() != ConnectionStatus::Connected) {
         return false;
     }
 
@@ -469,6 +631,11 @@ void TwitchAuth::SetOnMessageCallback(std::function<void(const ChatMessage&)> ca
     m_onMessage = callback;
 }
 
+void TwitchAuth::SetOnRawMessageCallback(std::function<void(const std::string&)> callback)
+{
+    m_onRawMessage = callback;
+}
+
 void TwitchAuth::SetOnStatusCallback(std::function<void(ConnectionStatus, const std::string&)> callback)
 {
     m_onStatus = callback;
@@ -484,8 +651,16 @@ void TwitchAuth::ReceiveLoop()
         int bytesReceived = recv(m_socket, buffer, sizeof(buffer) - 1, 0);
 
         if (bytesReceived <= 0) {
+            // Check if it's a timeout (which is normal and expected)
+            int error = WSAGetLastError();
+            if (error == WSAETIMEDOUT) {
+                // Timeout is normal - just continue and check m_running
+                continue;
+            }
+
+            // Any other error or 0 bytes means connection lost
             if (m_running) {
-                std::cout << "[TwitchAuth] Connection lost in ReceiveLoop" << std::endl;
+                std::cout << "[TwitchAuth] Connection lost in ReceiveLoop (error: " << error << ")" << std::endl;
                 SetStatus(ConnectionStatus::Error, "Connection lost");
             }
             break;
@@ -506,9 +681,27 @@ void TwitchAuth::ReceiveLoop()
     std::cout << "[TwitchAuth] ReceiveLoop ended" << std::endl;
 }
 
-
 void TwitchAuth::ProcessLine(const std::string& line)
 {
+    // Call raw message callback for full IRC message parsing
+    if (m_onRawMessage) {
+        m_onRawMessage(line);
+    }
+
+    // Check for authentication failure
+    if (line.find("Login authentication failed") != std::string::npos ||
+        line.find("Login unsuccessful") != std::string::npos) {
+        std::cout << "[TwitchAuth] ========================================" << std::endl;
+        std::cout << "[TwitchAuth] AUTHENTICATION FAILED!" << std::endl;
+        std::cout << "[TwitchAuth] Your OAuth token is invalid or expired." << std::endl;
+        std::cout << "[TwitchAuth] Please disconnect and reconnect to Twitch." << std::endl;
+        std::cout << "[TwitchAuth] ========================================" << std::endl;
+        SetStatus(ConnectionStatus::Error, "Authentication failed - Token expired");
+        m_running = false;  // Stop receive loop
+        CleanupSocket();    // Close socket
+        return;
+    }
+
     // Handle PING
     if (line.find("PING") == 0) {
         std::string pong = "PONG :tmi.twitch.tv\r\n";
@@ -559,9 +752,13 @@ void TwitchAuth::ParseMessage(const std::string& line)
 
 void TwitchAuth::SetStatus(ConnectionStatus status, const std::string& message)
 {
-    m_status = status;
-    m_statusMessage = message;
+    {
+        std::lock_guard<std::mutex> lock(m_statusMutex);
+        m_status = status;
+        m_statusMessage = message;
+    }
 
+    // Call callback outside of lock to avoid potential deadlock
     if (m_onStatus) {
         m_onStatus(status, message);
     }
@@ -570,7 +767,19 @@ void TwitchAuth::SetStatus(ConnectionStatus status, const std::string& message)
 bool TwitchAuth::InitializeSocket()
 {
     m_socket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    return m_socket != INVALID_SOCKET;
+    if (m_socket == INVALID_SOCKET) {
+        return false;
+    }
+
+    // Set receive timeout to 5 seconds so recv() doesn't block forever
+    // This allows the receive thread to check m_running flag regularly
+    DWORD timeout = 5000; // 5 seconds in milliseconds
+    if (setsockopt(m_socket, SOL_SOCKET, SO_RCVTIMEO, (char*)&timeout, sizeof(timeout)) == SOCKET_ERROR) {
+        std::cout << "[TwitchAuth] Warning: Failed to set socket timeout" << std::endl;
+        // Not fatal, continue anyway
+    }
+
+    return true;
 }
 
 void TwitchAuth::CleanupSocket()
@@ -732,4 +941,133 @@ std::string TwitchAuth::HttpGetWithAuth(const std::string& url, const std::strin
     WinHttpCloseHandle(hSession);
 
     return response;
+}
+void TwitchAuth::SetOnNewFollowerCallback(std::function<void(const std::string&)> callback)
+{
+    m_onNewFollower = callback;
+}
+
+void TwitchAuth::StartFollowerPolling()
+{
+    if (m_followerPolling) return;
+
+    std::cout << "[TwitchAuth] Starting follower polling..." << std::endl;
+
+    // Join old thread if it exists
+    if (m_followerPollThread.joinable()) {
+        std::cout << "[TwitchAuth] Joining old follower poll thread..." << std::endl;
+        m_followerPolling = false;
+        m_followerPollThread.join();
+    }
+
+    m_followerPolling = true;
+    m_followerPollThread = std::thread(&TwitchAuth::FollowerPollLoop, this);
+}
+
+void TwitchAuth::StopFollowerPolling()
+{
+    if (!m_followerPolling) return;
+
+    std::cout << "[TwitchAuth] Stopping follower polling..." << std::endl;
+    m_followerPolling = false;
+
+    if (m_followerPollThread.joinable()) {
+        m_followerPollThread.join();
+    }
+}
+
+void TwitchAuth::FollowerPollLoop()
+{
+    std::cout << "[TwitchAuth] Follower poll loop started" << std::endl;
+
+    // Initial check to populate known followers (without announcing)
+    std::string token = GetAccessToken();
+    if (!token.empty()) {
+        std::string url = "https://api.twitch.tv/helix/channels/followers?broadcaster_id=" + m_userId + "&first=100";
+        std::string response = HttpGetWithAuth(url, token);
+
+        // Parse initial followers (simplified JSON parsing)
+        size_t pos = 0;
+        while ((pos = response.find("\"user_id\":\"", pos)) != std::string::npos) {
+            pos += 11; // Length of "user_id":"
+            size_t endPos = response.find("\"", pos);
+            if (endPos != std::string::npos) {
+                std::string userId = response.substr(pos, endPos - pos);
+                std::lock_guard<std::mutex> lock(m_followerMutex);
+                m_knownFollowers.insert(userId);
+                pos = endPos;
+            }
+        }
+        std::cout << "[TwitchAuth] Loaded " << m_knownFollowers.size() << " initial followers" << std::endl;
+    }
+
+    // Poll every 60 seconds
+    while (m_followerPolling) {
+        std::this_thread::sleep_for(std::chrono::seconds(60));
+
+        if (!m_followerPolling) break;
+
+        CheckForNewFollowers();
+    }
+
+    std::cout << "[TwitchAuth] Follower poll loop ended" << std::endl;
+}
+
+void TwitchAuth::CheckForNewFollowers()
+{
+    if (!IsAuthenticated()) return;
+
+    std::string token = GetAccessToken();
+    if (token.empty()) {
+        std::cout << "[TwitchAuth] Failed to get token for follower check" << std::endl;
+        return;
+    }
+
+    // Get recent followers
+    std::string url = "https://api.twitch.tv/helix/channels/followers?broadcaster_id=" + m_userId + "&first=20";
+    std::string response = HttpGetWithAuth(url, token);
+
+    if (response.empty()) {
+        std::cout << "[TwitchAuth] Empty response from followers API" << std::endl;
+        return;
+    }
+
+    // Parse followers from response (simplified JSON parsing)
+    std::vector<std::pair<std::string, std::string>> currentFollowers; // user_id, user_name
+
+    size_t pos = 0;
+    while ((pos = response.find("\"user_id\":\"", pos)) != std::string::npos) {
+        pos += 11; // Length of "user_id":"
+        size_t endPos = response.find("\"", pos);
+        if (endPos == std::string::npos) break;
+
+        std::string userId = response.substr(pos, endPos - pos);
+        pos = endPos;
+
+        // Find corresponding user_name
+        size_t namePos = response.find("\"user_name\":\"", pos);
+        if (namePos != std::string::npos && namePos < response.find("\"user_id\":\"", pos + 1)) {
+            namePos += 13; // Length of "user_name":"
+            size_t nameEndPos = response.find("\"", namePos);
+            if (nameEndPos != std::string::npos) {
+                std::string userName = response.substr(namePos, nameEndPos - namePos);
+                currentFollowers.push_back({ userId, userName });
+            }
+        }
+    }
+
+    // Check for new followers
+    std::lock_guard<std::mutex> lock(m_followerMutex);
+    for (const auto& follower : currentFollowers) {
+        if (m_knownFollowers.find(follower.first) == m_knownFollowers.end()) {
+            // New follower detected!
+            std::cout << "[TwitchAuth] New follower detected: " << follower.second << " (ID: " << follower.first << ")" << std::endl;
+            m_knownFollowers.insert(follower.first);
+
+            // Notify callback
+            if (m_onNewFollower) {
+                m_onNewFollower(follower.second);
+            }
+        }
+    }
 }

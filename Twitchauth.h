@@ -4,6 +4,8 @@
 #include <functional>
 #include <thread>
 #include <mutex>
+#include <set>
+#include <atomic>
 #include <WinSock2.h>
 
 enum class ConnectionStatus {
@@ -44,15 +46,35 @@ public:
     std::string GetAccessToken(); // Gets valid token from worker API
 
     // Status
-    ConnectionStatus GetStatus() const { return m_status; }
-    std::string GetStatusMessage() const { return m_statusMessage; }
-    std::string GetUsername() const { return m_username; }
-    std::string GetUserId() const { return m_userId; }
+    ConnectionStatus GetStatus() const {
+        std::lock_guard<std::mutex> lock(m_statusMutex);
+        return m_status;
+    }
+    std::string GetStatusMessage() const {
+        std::lock_guard<std::mutex> lock(m_statusMutex);
+        return m_statusMessage;
+    }
+    std::string GetUsername() const {
+        std::lock_guard<std::mutex> lock(m_authMutex);
+        return m_username;
+    }
+    std::string GetUserId() const {
+        std::lock_guard<std::mutex> lock(m_authMutex);
+        return m_userId;
+    }
+    std::string GetClientId() const { return m_clientId; }
+    bool IsDisconnecting() const { return m_disconnecting.load(); }
 
     // Messages
     std::vector<ChatMessage> GetMessages() const;
     void SetOnMessageCallback(std::function<void(const ChatMessage&)> callback);
+    void SetOnRawMessageCallback(std::function<void(const std::string&)> callback);
     void SetOnStatusCallback(std::function<void(ConnectionStatus, const std::string&)> callback);
+    void SetOnNewFollowerCallback(std::function<void(const std::string&)> callback);
+
+    // Follower tracking
+    void StartFollowerPolling();
+    void StopFollowerPolling();
 
 private:
     // Configuration
@@ -61,11 +83,13 @@ private:
     std::string m_userId;
     std::string m_username;
     std::string m_channel;
+    mutable std::mutex m_authMutex;  // Protect m_userId and m_username
 
     // IRC Connection
     SOCKET m_socket;
     std::thread m_receiveThread;
     bool m_running;
+    std::atomic<bool> m_disconnecting;
 
     // Local HTTP server for OAuth callback
     SOCKET m_serverSocket;
@@ -78,14 +102,25 @@ private:
     // Status
     ConnectionStatus m_status;
     std::string m_statusMessage;
+    mutable std::mutex m_statusMutex;  // Protect status variables
     void SetStatus(ConnectionStatus status, const std::string& message);
 
     // Messages
     std::vector<ChatMessage> m_messages;
     mutable std::mutex m_messagesMutex;
     std::function<void(const ChatMessage&)> m_onMessage;
+    std::function<void(const std::string&)> m_onRawMessage;
     std::function<void(ConnectionStatus, const std::string&)> m_onStatus;
+    std::function<void(const std::string&)> m_onNewFollower;
     static constexpr size_t MAX_MESSAGES = 1000;
+
+    // Follower tracking
+    std::thread m_followerPollThread;
+    bool m_followerPolling;
+    std::set<std::string> m_knownFollowers; // Store follower user IDs
+    mutable std::mutex m_followerMutex;
+    void FollowerPollLoop();
+    void CheckForNewFollowers();
 
     // IRC Processing
     void ReceiveLoop();

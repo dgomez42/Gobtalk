@@ -2,6 +2,7 @@
 #include <windows.h>
 #include <string>
 #include <vector>
+#include <mutex>
 #include "ttsapi.h"
 
 class DECtalkWrapper {
@@ -24,6 +25,9 @@ private:
 
     int currentVoice;
     int currentVolume;
+
+    // Thread safety
+    mutable std::mutex m_speakMutex;
 
 public:
     DECtalkWrapper();

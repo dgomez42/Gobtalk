@@ -53,16 +53,27 @@ bool DECtalkWrapper::Initialize(const std::string& dllPath, int audioDevice) {
 }
 
 bool DECtalkWrapper::Speak(const std::string& text) {
-    if (!ttsHandle || !pSpeak) return false;
+    std::lock_guard<std::mutex> lock(m_speakMutex);
+
+    if (!ttsHandle || !pSpeak) {
+        std::cout << "[DECtalk] Cannot speak - not initialized" << std::endl;
+        return false;
+    }
 
     // Build volume command and combine with text
     std::string volumeCmd = "[:volume set " + std::to_string(currentVolume) + "]";
     std::string fullText = volumeCmd + text;
 
-    std::cout << "Speaking with volume command: " << volumeCmd << std::endl;
+    std::cout << "[DECtalk] Speaking: " << text.substr(0, 50) << (text.length() > 50 ? "..." : "") << std::endl;
 
     MMRESULT result = pSpeak(ttsHandle, &fullText[0], TTS_FORCE);
-    return (result == MMSYSERR_NOERROR);
+
+    if (result != MMSYSERR_NOERROR) {
+        std::cout << "[DECtalk] Speak failed with error: " << result << std::endl;
+        return false;
+    }
+
+    return true;
 }
 
 bool DECtalkWrapper::SetVoice(int voiceIndex) {

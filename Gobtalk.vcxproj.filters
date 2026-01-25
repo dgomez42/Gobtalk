@@ -45,6 +45,12 @@
     <ClCompile Include="Twitchauth.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="Twitchmessagehandler.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="Twitcheventsub.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <Image Include="Mondern Win98.ico">
@@ -88,6 +94,12 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="DECtalkWrapper.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Twitchmessagehandler.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Twitcheventsub.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
