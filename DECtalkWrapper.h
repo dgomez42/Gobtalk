@@ -2,7 +2,6 @@
 #include <windows.h>
 #include <string>
 #include <vector>
-#include <mutex>
 #include "ttsapi.h"
 
 class DECtalkWrapper {
@@ -16,18 +15,19 @@ private:
     typedef MMRESULT(WINAPI* pfnShutdown)(LPTTS_HANDLE_T);
     typedef MMRESULT(WINAPI* pfnSetSpeaker)(LPTTS_HANDLE_T, SPEAKER_T);
     typedef MMRESULT(WINAPI* pfnSetVolume)(LPTTS_HANDLE_T, int);
+    typedef MMRESULT(WINAPI* pfnReset)(LPTTS_HANDLE_T, BOOL);
+    typedef MMRESULT(WINAPI* pfnSync)(LPTTS_HANDLE_T);
 
     pfnStartup pStartup;
     pfnSpeak pSpeak;
     pfnShutdown pShutdown;
     pfnSetSpeaker pSetSpeaker;
     pfnSetVolume pSetVolume;
+    pfnReset pReset;
+    pfnSync pSync;
 
     int currentVoice;
     int currentVolume;
-
-    // Thread safety
-    mutable std::mutex m_speakMutex;
 
 public:
     DECtalkWrapper();
@@ -35,7 +35,11 @@ public:
 
     bool Initialize(const std::string& dllPath, int audioDevice = WAVE_MAPPER);
     bool Speak(const std::string& text);
+    bool SpeakAsync(const std::string& text); // Non-blocking speak
+    bool WaitForCompletion(); // Wait until current speech finishes
     bool SetVoice(int voiceIndex); // 0-8: Paul, Betty, Harry, Frank, Dennis, Kit, Ursula, Rita, Wendy
     bool SetVolume(int volume); // 0-100
+    void Stop(); // Clear entire queue
+    void Skip(); // Skip current message, continue with next in queue
     std::vector<std::string> GetVoiceNames();
 };

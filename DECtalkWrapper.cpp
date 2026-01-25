@@ -31,6 +31,8 @@ bool DECtalkWrapper::Initialize(const std::string& dllPath, int audioDevice) {
     pShutdown = (pfnShutdown)GetProcAddress(hDll, "TextToSpeechShutdown");
     pSetSpeaker = (pfnSetSpeaker)GetProcAddress(hDll, "TextToSpeechSetSpeaker");
     pSetVolume = (pfnSetVolume)GetProcAddress(hDll, "TextToSpeechSetVolume");
+    pReset = (pfnReset)GetProcAddress(hDll, "TextToSpeechReset");
+    pSync = (pfnSync)GetProcAddress(hDll, "TextToSpeechSync");
 
     if (!pStartup || !pSpeak || !pShutdown) {
         std::cerr << "Failed to get DECtalk functions" << std::endl;
@@ -53,27 +55,33 @@ bool DECtalkWrapper::Initialize(const std::string& dllPath, int audioDevice) {
 }
 
 bool DECtalkWrapper::Speak(const std::string& text) {
-    std::lock_guard<std::mutex> lock(m_speakMutex);
+    if (!SpeakAsync(text)) return false;
+    return WaitForCompletion();
+}
 
-    if (!ttsHandle || !pSpeak) {
-        std::cout << "[DECtalk] Cannot speak - not initialized" << std::endl;
-        return false;
-    }
+bool DECtalkWrapper::SpeakAsync(const std::string& text) {
+    if (!ttsHandle || !pSpeak) return false;
 
     // Build volume command and combine with text
     std::string volumeCmd = "[:volume set " + std::to_string(currentVolume) + "]";
     std::string fullText = volumeCmd + text;
 
-    std::cout << "[DECtalk] Speaking: " << text.substr(0, 50) << (text.length() > 50 ? "..." : "") << std::endl;
+    std::cout << "Speaking (async) with volume command: " << volumeCmd << std::endl;
 
-    MMRESULT result = pSpeak(ttsHandle, &fullText[0], TTS_FORCE);
+    // Use 0 instead of TTS_FORCE for asynchronous speech
+    MMRESULT result = pSpeak(ttsHandle, &fullText[0], 0);
+    return (result == MMSYSERR_NOERROR);
+}
 
-    if (result != MMSYSERR_NOERROR) {
-        std::cout << "[DECtalk] Speak failed with error: " << result << std::endl;
+bool DECtalkWrapper::WaitForCompletion() {
+    if (!ttsHandle || !pSync) {
+        std::cerr << "WaitForCompletion failed: Invalid handle or function pointer" << std::endl;
         return false;
     }
 
-    return true;
+    // TextToSpeechSync waits until all queued speech is complete
+    MMRESULT result = pSync(ttsHandle);
+    return (result == MMSYSERR_NOERROR);
 }
 
 bool DECtalkWrapper::SetVoice(int voiceIndex) {
@@ -114,4 +122,37 @@ std::vector<std::string> DECtalkWrapper::GetVoiceNames() {
         "Paul", "Betty", "Harry", "Frank", "Dennis",
         "Kit", "Ursula", "Rita", "Wendy"
     };
+}
+
+void DECtalkWrapper::Stop() {
+    if (!ttsHandle || !pReset) {
+        std::cerr << "Stop failed: Invalid handle or function pointer" << std::endl;
+        return;
+    }
+
+    // Reset with TRUE clears the audio queue completely
+    MMRESULT result = pReset(ttsHandle, TRUE);
+    if (result == MMSYSERR_NOERROR) {
+        std::cout << "[DECtalk] Queue cleared (Stop)" << std::endl;
+    }
+    else {
+        std::cerr << "[DECtalk] Stop failed with error: " << result << std::endl;
+    }
+}
+
+void DECtalkWrapper::Skip() {
+    if (!ttsHandle || !pReset) {
+        std::cerr << "Skip failed: Invalid handle or function pointer" << std::endl;
+        return;
+    }
+
+    // Reset with FALSE stops current message
+    // This causes WaitForCompletion() to return, allowing ProcessLoop to continue to next message
+    MMRESULT result = pReset(ttsHandle, FALSE);
+    if (result == MMSYSERR_NOERROR) {
+        std::cout << "[DECtalk] Skipped current message" << std::endl;
+    }
+    else {
+        std::cerr << "[DECtalk] Skip failed with error: " << result << std::endl;
+    }
 }

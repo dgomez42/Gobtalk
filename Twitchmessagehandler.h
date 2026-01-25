@@ -47,6 +47,7 @@ public:
     void SetTwitchAuth(TwitchAuth* auth);
     void Start();
     void Stop();
+    void ClearQueue(); // Clear all pending messages
 
     // TTS Mode
     void SetTTSMode(TTSMode mode) { m_ttsMode = mode; }

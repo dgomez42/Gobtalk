@@ -58,6 +58,21 @@ void TwitchMessageHandler::Stop()
     }
 }
 
+void TwitchMessageHandler::ClearQueue()
+{
+    std::lock_guard<std::mutex> lock(m_queueMutex);
+
+    // Clear both queue modes
+    while (!m_queueMode.empty()) {
+        m_queueMode.pop();
+    }
+    while (!m_keepUpMode.empty()) {
+        m_keepUpMode.pop();
+    }
+
+    std::cout << "[MessageHandler] Queue cleared" << std::endl;
+}
+
 void TwitchMessageHandler::OnMessage(const ChatMessage& msg)
 {
     std::cout << "[MessageHandler] Received message from " << msg.username << ": " << msg.message << std::endl;
@@ -544,7 +559,12 @@ void TwitchMessageHandler::ProcessLoop()
 
         if (!textToSpeak.empty()) {
             std::cout << "[MessageHandler] Speaking: " << textToSpeak << std::endl;
-            m_dectalk.Speak(textToSpeak);
+
+            // Speak asynchronously
+            m_dectalk.SpeakAsync(textToSpeak);
+
+            // Wait for completion (this allows Skip to interrupt)
+            m_dectalk.WaitForCompletion();
         }
 
         // Small delay to prevent busy-waiting

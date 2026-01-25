@@ -73,11 +73,11 @@ void ApplyWin98Style()
     ImVec4* colors = style.Colors;
 
     // Classic Win98 colors
-    colors[ImGuiCol_Text] = ImVec4(0.0f, 0.0f, 0.0f, 1.0f);
+    colors[ImGuiCol_Text] = ImVec4(0.0f, 0.0f, 0.0f, 1.0f);  // Pure black text
     colors[ImGuiCol_TextDisabled] = ImVec4(0.6f, 0.6f, 0.6f, 1.0f);
     colors[ImGuiCol_WindowBg] = ImVec4(0.76f, 0.76f, 0.76f, 1.0f); // Win98 gray
     colors[ImGuiCol_ChildBg] = ImVec4(0.76f, 0.76f, 0.76f, 1.0f);
-    colors[ImGuiCol_PopupBg] = ImVec4(0.76f, 0.76f, 0.76f, 1.0f);
+    colors[ImGuiCol_PopupBg] = ImVec4(1.0f, 1.0f, 1.0f, 1.0f);  // White background for dropdowns/tooltips (Win98)
     colors[ImGuiCol_Border] = ImVec4(0.0f, 0.0f, 0.0f, 1.0f);
     colors[ImGuiCol_BorderShadow] = ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
     colors[ImGuiCol_FrameBg] = ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
@@ -97,9 +97,12 @@ void ApplyWin98Style()
     colors[ImGuiCol_Button] = ImVec4(0.76f, 0.76f, 0.76f, 1.0f);
     colors[ImGuiCol_ButtonHovered] = ImVec4(0.8f, 0.8f, 0.8f, 1.0f);
     colors[ImGuiCol_ButtonActive] = ImVec4(0.6f, 0.6f, 0.6f, 1.0f);
-    colors[ImGuiCol_Header] = ImVec4(0.0f, 0.0f, 0.5f, 1.0f);
-    colors[ImGuiCol_HeaderHovered] = ImVec4(0.0f, 0.0f, 0.6f, 1.0f);
-    colors[ImGuiCol_HeaderActive] = ImVec4(0.0f, 0.0f, 0.7f, 1.0f);
+
+    // Dropdown/Menu colors (Windows 98 style)
+    colors[ImGuiCol_Header] = ImVec4(1.0f, 1.0f, 1.0f, 0.0f);  // No highlight for selected item (transparent)
+    colors[ImGuiCol_HeaderHovered] = ImVec4(0.0f, 0.0f, 0.5f, 1.0f);  // Dark blue on hover (Win98)
+    colors[ImGuiCol_HeaderActive] = ImVec4(0.0f, 0.0f, 0.5f, 1.0f);   // Dark blue when clicked (Win98)
+
     colors[ImGuiCol_Separator] = ImVec4(0.5f, 0.5f, 0.5f, 1.0f);
     colors[ImGuiCol_SeparatorHovered] = ImVec4(0.6f, 0.6f, 0.6f, 1.0f);
     colors[ImGuiCol_SeparatorActive] = ImVec4(0.7f, 0.7f, 0.7f, 1.0f);
@@ -123,9 +126,45 @@ void ApplyWin98Style()
     style.WindowBorderSize = 0.0f;     // We draw custom window border
     style.ChildBorderSize = 0.0f;      // We draw custom sunken borders
     style.FrameBorderSize = 1.0f;
-    style.FramePadding = ImVec2(4.0f, 3.0f);
+    style.FramePadding = ImVec2(4.0f, 3.0f);  // Default for sliders, dropdowns, etc.
     style.ItemSpacing = ImVec2(8.0f, 4.0f);
     style.ScrollbarSize = 16.0f;
+}
+
+// Helper macros for custom checkbox padding
+#define BEGIN_CHECKBOX_STYLE() ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(1.0f, 1.0f))
+#define END_CHECKBOX_STYLE() ImGui::PopStyleVar()
+
+// Global tooltip padding setting - change this one value to adjust ALL tooltip sizes
+static const ImVec2 TOOLTIP_PADDING = ImVec2(16.0f, 16.0f);
+// Global tooltip font scale - 1.0 = normal, 1.2 = 20% larger, 0.8 = 20% smaller
+static const float TOOLTIP_FONT_SCALE = 1.0f;
+// Optional: Set to a specific ImFont* to use a different font for tooltips (nullptr = use default)
+static ImFont* TOOLTIP_FONT = nullptr;
+
+// Helper function for consistent tooltips with proper padding
+inline void ShowTooltip(const char* text) {
+    if (ImGui::IsItemHovered()) {
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, TOOLTIP_PADDING);
+        ImGui::BeginTooltip();
+
+        // Use custom font if specified
+        if (TOOLTIP_FONT != nullptr) {
+            ImGui::PushFont(TOOLTIP_FONT);
+        }
+
+        ImGui::SetWindowFontScale(TOOLTIP_FONT_SCALE);  // Control tooltip font size
+        ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+        ImGui::TextUnformatted(text);
+        ImGui::PopTextWrapPos();
+
+        if (TOOLTIP_FONT != nullptr) {
+            ImGui::PopFont();
+        }
+
+        ImGui::EndTooltip();
+        ImGui::PopStyleVar();
+    }
 }
 
 // Draw Win98-style beveled border (inset or outset)
@@ -439,6 +478,12 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
     // Try to load custom fonts
     fontRegular = io.Fonts->AddFontFromFileTTF("MS Sans Serif.ttf", 12.0f, &fontConfig);
     fontBold = io.Fonts->AddFontFromFileTTF("MS Sans Serif Bold.ttf", 14.0f, &fontConfig);
+
+    // Optional: Load a larger font specifically for tooltips (uncomment to enable)
+    // ImFont* tooltipFont = io.Fonts->AddFontFromFileTTF("MS Sans Serif.ttf", 16.0f, &fontConfig);
+    // if (tooltipFont) {
+    //     TOOLTIP_FONT = tooltipFont;  // Set global tooltip font
+    // }
 
     // If either font failed to load, use default font for both
     if (!fontRegular || !fontBold) {
@@ -896,9 +941,24 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
 
             ImGui::Spacing();
 
+            // Speak button on the left
             if (Win98Button("Speak", ImVec2(200, 30)))
             {
                 dectalk.Speak(textBuffer);
+            }
+
+            // Stop button on the same line, to the right
+            ImGui::SameLine();
+            if (Win98Button("Stop", ImVec2(200, 30)))
+            {
+                dectalk.Stop();              // Stop current audio
+                messageHandler->ClearQueue(); // Clear pending messages
+            }
+
+            // Skip button underneath Speak
+            if (Win98Button("Skip", ImVec2(200, 30)))
+            {
+                dectalk.Skip();
             }
         }
         else if (selectedTab == 2) {
@@ -1106,10 +1166,10 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
             ImGui::Spacing();
 
             // Chat Messages and !say Command on same line
+            BEGIN_CHECKBOX_STYLE();
             ImGui::Checkbox("Read Chat Messages", &messageHandler->enableChatMessages);
-            if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("Must be ON for the bot to process chat messages and !say commands");
-            }
+            END_CHECKBOX_STYLE();
+            ShowTooltip("Must be ON for the bot to process chat messages and !say commands");
 
             ImGui::SameLine(250); // Position to the right
 
@@ -1118,18 +1178,18 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
                 ImGui::BeginDisabled();
             }
 
+            BEGIN_CHECKBOX_STYLE();
             ImGui::Checkbox("Require !say Command", &messageHandler->enableSayCommand);
-            if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("When ON: Users MUST use !say to have messages read\nWhen OFF: All messages are read normally");
-            }
+            END_CHECKBOX_STYLE();
+            ShowTooltip("When ON: Users MUST use !say to have messages read\nWhen OFF: All messages are read normally");
 
             ImGui::Spacing();
 
             // Read Username toggle
+            BEGIN_CHECKBOX_STYLE();
             ImGui::Checkbox("Read Username", &messageHandler->readUsername);
-            if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("When ON: Says \"Username says: message\" (for all messages including !say)\nWhen OFF: Just says the message");
-            }
+            END_CHECKBOX_STYLE();
+            ShowTooltip("When ON: Says \"Username says: message\" (for all messages including !say)\nWhen OFF: Just says the message");
 
             ImGui::Spacing();
             ImGui::Separator();
@@ -1152,9 +1212,7 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
                     TwitchMessageHandler::RoleFilterMode::Custom;
             }
 
-            if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("Everyone: Read all messages\nCustom: Only read from selected roles");
-            }
+            ShowTooltip("Everyone: Read all messages\nCustom: Only read from selected roles");
 
             // Always show role checkboxes (grey them out instead of hiding)
             ImGui::Spacing();
@@ -1168,27 +1226,37 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
                 ImGui::BeginDisabled();
             }
 
+            BEGIN_CHECKBOX_STYLE();
             ImGui::Checkbox("Followers", &messageHandler->allowFollowers);
+            END_CHECKBOX_STYLE();
             if (ImGui::IsItemHovered()) {
                 ImGui::SetTooltip("Allow messages from followers (currently allows everyone - EventSub needed)");
             }
 
-            ImGui::Checkbox("Subscribers", &messageHandler->allowSubscribers);
+            BEGIN_CHECKBOX_STYLE();
+            ImGui::Checkbox("Subscribers##rolefilter", &messageHandler->allowSubscribers);
+            END_CHECKBOX_STYLE();
             if (ImGui::IsItemHovered()) {
                 ImGui::SetTooltip("Allow messages from channel subscribers");
             }
 
+            BEGIN_CHECKBOX_STYLE();
             ImGui::Checkbox("Turbo Users", &messageHandler->allowTurbo);
+            END_CHECKBOX_STYLE();
             if (ImGui::IsItemHovered()) {
                 ImGui::SetTooltip("Allow messages from Twitch Turbo users");
             }
 
+            BEGIN_CHECKBOX_STYLE();
             ImGui::Checkbox("Moderators", &messageHandler->allowMods);
+            END_CHECKBOX_STYLE();
             if (ImGui::IsItemHovered()) {
                 ImGui::SetTooltip("Allow messages from channel moderators");
             }
 
+            BEGIN_CHECKBOX_STYLE();
             ImGui::Checkbox("VIPs", &messageHandler->allowVIPs);
+            END_CHECKBOX_STYLE();
             if (ImGui::IsItemHovered()) {
                 ImGui::SetTooltip("Allow messages from channel VIPs");
             }
@@ -1214,96 +1282,135 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
             ImGui::Spacing();
 
             // Subscriber Announcements
-            ImGui::Checkbox("New Subscribers", &messageHandler->enableSubscriberAnnouncements);
+            BEGIN_CHECKBOX_STYLE();
+            ImGui::Checkbox("Subscribers##announcements", &messageHandler->enableSubscriberAnnouncements);
+            END_CHECKBOX_STYLE();
             if (ImGui::IsItemHovered()) {
                 ImGui::SetTooltip("Announce new subscriptions and resubscriptions");
             }
 
-            if (messageHandler->enableSubscriberAnnouncements) {
-                ImGui::Indent(20);
-                ImGui::Text("Subscription Message:");
-                ImGui::SetNextItemWidth(-1); // Full width
-                char subBuffer[256];
-                strncpy_s(subBuffer, messageHandler->subscriberMessage.c_str(), sizeof(subBuffer) - 1);
-                if (ImGui::InputText("##submsg", subBuffer, sizeof(subBuffer))) {
-                    messageHandler->subscriberMessage = subBuffer;
-                }
-                if (ImGui::IsItemHovered()) {
-                    ImGui::SetTooltip("Use {username} as placeholder. Example: {username} just subscribed!");
-                }
-
-                ImGui::Text("Resubscription Message:");
-                ImGui::SetNextItemWidth(-1); // Full width
-                char resubBuffer[256];
-                strncpy_s(resubBuffer, messageHandler->resubscriberMessage.c_str(), sizeof(resubBuffer) - 1);
-                if (ImGui::InputText("##resubmsg", resubBuffer, sizeof(resubBuffer))) {
-                    messageHandler->resubscriberMessage = resubBuffer;
-                }
-                if (ImGui::IsItemHovered()) {
-                    ImGui::SetTooltip("Use {username} and {months} as placeholders. Example: {username} resubscribed for {months} months!");
-                }
-                ImGui::Unindent(20);
+            // Always show options, grey them out when disabled
+            ImGui::Indent(20);
+            if (!messageHandler->enableSubscriberAnnouncements) {
+                ImGui::BeginDisabled();
             }
+
+            ImGui::Text("Subscription Message:");
+            ImGui::SetNextItemWidth(-1); // Full width
+            char subBuffer[256];
+            strncpy_s(subBuffer, messageHandler->subscriberMessage.c_str(), sizeof(subBuffer) - 1);
+            if (ImGui::InputText("##submsg", subBuffer, sizeof(subBuffer))) {
+                messageHandler->subscriberMessage = subBuffer;
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Use {username} as placeholder. Example: {username} just subscribed!");
+            }
+
+            ImGui::Text("Resubscription Message:");
+            ImGui::SetNextItemWidth(-1); // Full width
+            char resubBuffer[256];
+            strncpy_s(resubBuffer, messageHandler->resubscriberMessage.c_str(), sizeof(resubBuffer) - 1);
+            if (ImGui::InputText("##resubmsg", resubBuffer, sizeof(resubBuffer))) {
+                messageHandler->resubscriberMessage = resubBuffer;
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Use {username} and {months} as placeholders. Example: {username} resubscribed for {months} months!");
+            }
+
+            if (!messageHandler->enableSubscriberAnnouncements) {
+                ImGui::EndDisabled();
+            }
+            ImGui::Unindent(20);
 
             ImGui::Spacing();
 
             // Follower Announcements
+            BEGIN_CHECKBOX_STYLE();
             ImGui::Checkbox("Follower Announcements", &messageHandler->enableFollowerAnnouncements);
+            END_CHECKBOX_STYLE();
             if (ImGui::IsItemHovered()) {
                 ImGui::SetTooltip("Announce new followers via Twitch EventSub WebSocket");
             }
-            if (messageHandler->enableFollowerAnnouncements) {
-                ImGui::Indent(20);
-                ImGui::Text("Follower Message:");
-                ImGui::SetNextItemWidth(-1); // Full width
-                char followerBuffer[256];
-                strncpy_s(followerBuffer, messageHandler->followerMessage.c_str(), sizeof(followerBuffer) - 1);
-                if (ImGui::InputText("##followmsg", followerBuffer, sizeof(followerBuffer))) {
-                    messageHandler->followerMessage = followerBuffer;
-                }
-                if (ImGui::IsItemHovered()) {
-                    ImGui::SetTooltip("Use {username} as placeholder. Example: {username} just followed!");
-                }
-                ImGui::Unindent(20);
+
+            // Always show options, grey them out when disabled
+            ImGui::Indent(20);
+            if (!messageHandler->enableFollowerAnnouncements) {
+                ImGui::BeginDisabled();
             }
+
+            ImGui::Text("Follower Message:");
+            ImGui::SetNextItemWidth(-1); // Full width
+            char followerBuffer[256];
+            strncpy_s(followerBuffer, messageHandler->followerMessage.c_str(), sizeof(followerBuffer) - 1);
+            if (ImGui::InputText("##followmsg", followerBuffer, sizeof(followerBuffer))) {
+                messageHandler->followerMessage = followerBuffer;
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Use {username} as placeholder. Example: {username} just followed!");
+            }
+
+            if (!messageHandler->enableFollowerAnnouncements) {
+                ImGui::EndDisabled();
+            }
+            ImGui::Unindent(20);
 
             ImGui::Spacing();
 
             // Bits Announcements
+            BEGIN_CHECKBOX_STYLE();
             ImGui::Checkbox("Bits/Cheers", &messageHandler->enableBitsAnnouncements);
+            END_CHECKBOX_STYLE();
             if (ImGui::IsItemHovered()) {
                 ImGui::SetTooltip("Announce bit cheers");
             }
 
-            if (messageHandler->enableBitsAnnouncements) {
-                ImGui::Text("  Minimum Bits:");
-                ImGui::SameLine(150);
-                ImGui::SetNextItemWidth(100);
-                ImGui::InputInt("##minbits", &messageHandler->minBitsToAnnounce, 1, 10);
-                if (messageHandler->minBitsToAnnounce < 1) messageHandler->minBitsToAnnounce = 1;
+            // Always show options, grey them out when disabled
+            ImGui::Indent(20);
+            if (!messageHandler->enableBitsAnnouncements) {
+                ImGui::BeginDisabled();
             }
+
+            ImGui::Text("Minimum Bits:");
+            ImGui::SameLine(150);
+            ImGui::SetNextItemWidth(100);
+            ImGui::InputInt("##minbits", &messageHandler->minBitsToAnnounce, 1, 10);
+            if (messageHandler->minBitsToAnnounce < 1) messageHandler->minBitsToAnnounce = 1;
+
+            if (!messageHandler->enableBitsAnnouncements) {
+                ImGui::EndDisabled();
+            }
+            ImGui::Unindent(20);
 
             ImGui::Spacing();
 
             // Channel Point Redeems
+            BEGIN_CHECKBOX_STYLE();
             ImGui::Checkbox("Channel Point Redeems", &messageHandler->enableChannelPointRedeems);
+            END_CHECKBOX_STYLE();
             if (ImGui::IsItemHovered()) {
                 ImGui::SetTooltip("Read messages from specific channel point reward redemptions");
             }
 
-            if (messageHandler->enableChannelPointRedeems) {
-                ImGui::Indent(20);
-                ImGui::Text("Reward Name:");
-                ImGui::SetNextItemWidth(-1); // Full width
-                if (ImGui::InputText("##rewardname", channelPointRewardName, sizeof(channelPointRewardName))) {
-                    // Update EventSub filter when text changes
-                    eventSub.SetRewardNameFilter(channelPointRewardName);
-                }
-                if (ImGui::IsItemHovered()) {
-                    ImGui::SetTooltip("Enter the exact name of the reward to listen for (case-sensitive).\nWhen this reward is redeemed, the TTS will read the user's message.");
-                }
-                ImGui::Unindent(20);
+            // Always show options, grey them out when disabled
+            ImGui::Indent(20);
+            if (!messageHandler->enableChannelPointRedeems) {
+                ImGui::BeginDisabled();
             }
+
+            ImGui::Text("Reward Name:");
+            ImGui::SetNextItemWidth(-1); // Full width
+            if (ImGui::InputText("##rewardname", channelPointRewardName, sizeof(channelPointRewardName))) {
+                // Update EventSub filter when text changes
+                eventSub.SetRewardNameFilter(channelPointRewardName);
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Enter the exact name of the reward to listen for (case-sensitive).\nWhen this reward is redeemed, the TTS will read the user's message.");
+            }
+
+            if (!messageHandler->enableChannelPointRedeems) {
+                ImGui::EndDisabled();
+            }
+            ImGui::Unindent(20);
 
             ImGui::Spacing();
             ImGui::Separator();
@@ -1315,7 +1422,9 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
 
             bool donationsEnabled = false; // Placeholder
             ImGui::BeginDisabled();
+            BEGIN_CHECKBOX_STYLE();
             ImGui::Checkbox("Donations", &donationsEnabled);
+            END_CHECKBOX_STYLE();
             ImGui::EndDisabled();
             ImGui::SameLine();
             ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "(Coming Soon)");
