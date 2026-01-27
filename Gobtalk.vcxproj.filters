@@ -51,6 +51,9 @@
     <ClCompile Include="Twitcheventsub.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="Goblinmode.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <Image Include="Mondern Win98.ico">
@@ -100,6 +103,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="Twitcheventsub.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Goblinmode.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

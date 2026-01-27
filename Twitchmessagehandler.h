@@ -8,6 +8,7 @@
 
 // Forward declarations
 class TwitchAuth;
+class GoblinMode;
 struct ChatMessage;
 
 // Extended message info with user roles and metadata
@@ -45,6 +46,7 @@ public:
 
     // Setup
     void SetTwitchAuth(TwitchAuth* auth);
+    void SetGoblinMode(GoblinMode* goblin);  // Set Goblin mode instance
     void Start();
     void Stop();
     void ClearQueue(); // Clear all pending messages
@@ -85,6 +87,10 @@ public:
     std::string subscriberMessage = "{username} just subscribed!";
     std::string resubscriberMessage = "{username} resubscribed for {months} months!";
 
+    // Filters
+    std::vector<std::string>* bannedUsernames = nullptr;  // Pointer to UI's banned username list
+    std::vector<std::string>* bannedWords = nullptr;      // Pointer to UI's banned words list
+
     // Message callback from TwitchAuth
     void OnMessage(const ChatMessage& msg);
     void OnRawIRCMessage(const std::string& rawMessage);
@@ -96,6 +102,7 @@ public:
 private:
     DECtalkWrapper& m_dectalk;
     TwitchAuth* m_twitchAuth;
+    GoblinMode* m_goblinMode;  // Pointer to Goblin mode instance
 
     TTSMode m_ttsMode;
     bool m_running;

@@ -5,6 +5,7 @@
 #include "Twitchauth.h"
 #include "TwitchMessageHandler.h"
 #include "TwitchEventSub.h"
+#include "GoblinMode.h"
 #include "imgui.h"
 #include "imgui_impl_win32.h"
 #include "imgui_impl_dx11.h"
@@ -13,6 +14,8 @@
 #include <tchar.h>
 #include <string>
 #include <iostream>
+#include <fstream>
+#include <sstream>
 #include <thread>
 #include <chrono>
 #include <memory>
@@ -42,6 +45,9 @@ LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 // DECTalk instance
 DECtalkWrapper dectalk;
 
+// GoblinMode instance (for CHAOS!)
+GoblinMode goblinMode;
+
 // Twitch instance
 TwitchAuth twitchAuth;
 
@@ -61,10 +67,206 @@ static const char* voiceNames[] = { "Paul", "Betty", "Harry", "Frank", "Dennis",
 static int volume = 100;
 static char textBuffer[1024] = "Hello, I am DECtalk.";
 static char channelPointRewardName[256] = "";  // Filter for channel point redemptions
+static int selectedQueueMode = 1;  // 0 = Queue, 1 = Pace (default), 2 = Goblin
+static const char* queueModeNames[] = { "Queue", "Pace", "Goblin" };
+
+// Filter state
+static std::vector<std::string> bannedUsernames;
+static std::vector<std::string> bannedWords;
+static char bannedUsernamesText[4096] = "";  // Multiline text buffer for usernames
+static char bannedWordsText[4096] = "";      // Multiline text buffer for words
 
 // Window state
 static bool isMaximized = false;
 static RECT restoreRect = {};
+static bool showAboutDialog = false;
+
+// Menu state
+static int openMenuIndex = -1;  // -1 = none, 0 = File, 1 = Edit, 2 = Help
+static bool justOpenedMenu = false;  // Prevent closing menu on same frame it was opened
+
+// Helper functions to sync filter text buffers with vectors
+void UpdateBannedUsernamesFromText() {
+    bannedUsernames.clear();
+    std::string text(bannedUsernamesText);
+    std::stringstream ss(text);
+    std::string line;
+    while (std::getline(ss, line)) {
+        // Trim whitespace
+        line.erase(0, line.find_first_not_of(" \t\r\n"));
+        line.erase(line.find_last_not_of(" \t\r\n") + 1);
+        if (!line.empty()) {
+            bannedUsernames.push_back(line);
+        }
+    }
+}
+
+void UpdateBannedWordsFromText() {
+    bannedWords.clear();
+    std::string text(bannedWordsText);
+    std::stringstream ss(text);
+    std::string line;
+    while (std::getline(ss, line)) {
+        // Trim whitespace
+        line.erase(0, line.find_first_not_of(" \t\r\n"));
+        line.erase(line.find_last_not_of(" \t\r\n") + 1);
+        if (!line.empty()) {
+            bannedWords.push_back(line);
+        }
+    }
+}
+
+void UpdateTextFromBannedUsernames() {
+    bannedUsernamesText[0] = '\0';
+    for (size_t i = 0; i < bannedUsernames.size(); i++) {
+        strcat_s(bannedUsernamesText, sizeof(bannedUsernamesText), bannedUsernames[i].c_str());
+        if (i < bannedUsernames.size() - 1) {
+            strcat_s(bannedUsernamesText, sizeof(bannedUsernamesText), "\n");
+        }
+    }
+}
+
+void UpdateTextFromBannedWords() {
+    bannedWordsText[0] = '\0';
+    for (size_t i = 0; i < bannedWords.size(); i++) {
+        strcat_s(bannedWordsText, sizeof(bannedWordsText), bannedWords[i].c_str());
+        if (i < bannedWords.size() - 1) {
+            strcat_s(bannedWordsText, sizeof(bannedWordsText), "\n");
+        }
+    }
+}
+
+// Settings file functions
+void SaveSettings(const char* filename = "gobtalk_settings.ini") {
+    std::ofstream file(filename);
+    if (!file.is_open()) {
+        std::cerr << "[Settings] Failed to save settings to " << filename << std::endl;
+        return;
+    }
+
+    file << "[Voice]" << std::endl;
+    file << "SelectedVoice=" << selectedVoice << std::endl;
+    file << "Volume=" << volume << std::endl;
+    file << "QueueMode=" << selectedQueueMode << std::endl;
+
+    file << "\n[Options]" << std::endl;
+    if (messageHandler) {
+        file << "EnableChatMessages=" << messageHandler->enableChatMessages << std::endl;
+        file << "EnableSayCommand=" << messageHandler->enableSayCommand << std::endl;
+        file << "ReadUsername=" << messageHandler->readUsername << std::endl;
+        file << "RoleFilterMode=" << (int)messageHandler->roleFilterMode << std::endl;
+        file << "AllowFollowers=" << messageHandler->allowFollowers << std::endl;
+        file << "AllowSubscribers=" << messageHandler->allowSubscribers << std::endl;
+        file << "AllowTurbo=" << messageHandler->allowTurbo << std::endl;
+        file << "AllowMods=" << messageHandler->allowMods << std::endl;
+        file << "AllowVIPs=" << messageHandler->allowVIPs << std::endl;
+        file << "EnableSubscriberAnnouncements=" << messageHandler->enableSubscriberAnnouncements << std::endl;
+        file << "EnableFollowerAnnouncements=" << messageHandler->enableFollowerAnnouncements << std::endl;
+        file << "EnableBitsAnnouncements=" << messageHandler->enableBitsAnnouncements << std::endl;
+        file << "EnableChannelPointRedeems=" << messageHandler->enableChannelPointRedeems << std::endl;
+    }
+
+    file << "\n[Filters]" << std::endl;
+    file << "BannedUsernamesCount=" << bannedUsernames.size() << std::endl;
+    for (size_t i = 0; i < bannedUsernames.size(); i++) {
+        file << "BannedUser" << i << "=" << bannedUsernames[i] << std::endl;
+    }
+    file << "BannedWordsCount=" << bannedWords.size() << std::endl;
+    for (size_t i = 0; i < bannedWords.size(); i++) {
+        file << "BannedWord" << i << "=" << bannedWords[i] << std::endl;
+    }
+
+    file.close();
+    std::cout << "[Settings] Settings saved to " << filename << std::endl;
+}
+
+void LoadSettings(const char* filename = "gobtalk_settings.ini") {
+    std::ifstream file(filename);
+    if (!file.is_open()) {
+        std::cout << "[Settings] No saved settings found, using defaults" << std::endl;
+        return;
+    }
+
+    std::string line;
+    std::string section;
+
+    bannedUsernames.clear();
+    bannedWords.clear();
+
+    while (std::getline(file, line)) {
+        // Skip empty lines
+        if (line.empty()) continue;
+
+        // Check for section headers
+        if (line[0] == '[') {
+            section = line;
+            continue;
+        }
+
+        // Parse key=value
+        size_t pos = line.find('=');
+        if (pos == std::string::npos) continue;
+
+        std::string key = line.substr(0, pos);
+        std::string value = line.substr(pos + 1);
+
+        // Voice settings
+        if (key == "SelectedVoice") {
+            selectedVoice = std::stoi(value);
+            dectalk.SetVoice(selectedVoice);  // Apply to DECtalk
+        }
+        else if (key == "Volume") {
+            volume = std::stoi(value);
+            dectalk.SetVolume(volume);
+        }
+        else if (key == "QueueMode") {
+            selectedQueueMode = std::stoi(value);
+            TTSMode mode;
+            switch (selectedQueueMode) {
+            case 0: mode = TTSMode::Queue; break;
+            case 1: mode = TTSMode::KeepUp; break;
+            case 2: mode = TTSMode::Goblin; break;
+            default: mode = TTSMode::KeepUp; break;
+            }
+            if (messageHandler) messageHandler->SetTTSMode(mode);
+        }
+        // Options
+        else if (messageHandler) {
+            if (key == "EnableChatMessages") messageHandler->enableChatMessages = (value == "1");
+            else if (key == "EnableSayCommand") messageHandler->enableSayCommand = (value == "1");
+            else if (key == "ReadUsername") messageHandler->readUsername = (value == "1");
+            else if (key == "RoleFilterMode") messageHandler->roleFilterMode = (TwitchMessageHandler::RoleFilterMode)std::stoi(value);
+            else if (key == "AllowFollowers") messageHandler->allowFollowers = (value == "1");
+            else if (key == "AllowSubscribers") messageHandler->allowSubscribers = (value == "1");
+            else if (key == "AllowTurbo") messageHandler->allowTurbo = (value == "1");
+            else if (key == "AllowMods") messageHandler->allowMods = (value == "1");
+            else if (key == "AllowVIPs") messageHandler->allowVIPs = (value == "1");
+            else if (key == "EnableSubscriberAnnouncements") messageHandler->enableSubscriberAnnouncements = (value == "1");
+            else if (key == "EnableFollowerAnnouncements") messageHandler->enableFollowerAnnouncements = (value == "1");
+            else if (key == "EnableBitsAnnouncements") messageHandler->enableBitsAnnouncements = (value == "1");
+            else if (key == "EnableChannelPointRedeems") messageHandler->enableChannelPointRedeems = (value == "1");
+        }
+        // Filters
+        else if (key.find("BannedUser") == 0 && key != "BannedUsernamesCount") {
+            bannedUsernames.push_back(value);
+        }
+        else if (key.find("BannedWord") == 0 && key != "BannedWordsCount") {
+            bannedWords.push_back(value);
+        }
+    }
+
+    file.close();
+
+    // Update text buffers from loaded vectors
+    UpdateTextFromBannedUsernames();
+    UpdateTextFromBannedWords();
+
+    // Sync settings to GoblinMode
+    goblinMode.SetVoice(selectedVoice);
+    goblinMode.SetVolume(volume);
+
+    std::cout << "[Settings] Settings loaded from " << filename << std::endl;
+}
 
 // Win98 Color Scheme
 void ApplyWin98Style()
@@ -100,7 +302,7 @@ void ApplyWin98Style()
 
     // Dropdown/Menu colors (Windows 98 style)
     colors[ImGuiCol_Header] = ImVec4(1.0f, 1.0f, 1.0f, 0.0f);  // No highlight for selected item (transparent)
-    colors[ImGuiCol_HeaderHovered] = ImVec4(0.0f, 0.0f, 0.5f, 1.0f);  // Dark blue on hover (Win98)
+    colors[ImGuiCol_HeaderHovered] = ImVec4(0.063f, 0.518f, 0.816f, 1.0f);  // Light blue matching title bar (RGB 16, 132, 208)
     colors[ImGuiCol_HeaderActive] = ImVec4(0.0f, 0.0f, 0.5f, 1.0f);   // Dark blue when clicked (Win98)
 
     colors[ImGuiCol_Separator] = ImVec4(0.5f, 0.5f, 0.5f, 1.0f);
@@ -135,35 +337,35 @@ void ApplyWin98Style()
 #define BEGIN_CHECKBOX_STYLE() ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(1.0f, 1.0f))
 #define END_CHECKBOX_STYLE() ImGui::PopStyleVar()
 
-// Global tooltip padding setting - change this one value to adjust ALL tooltip sizes
+// Global tooltip padding setting - change this ONE value to adjust ALL tooltip sizes
 static const ImVec2 TOOLTIP_PADDING = ImVec2(16.0f, 16.0f);
 // Global tooltip font scale - 1.0 = normal, 1.2 = 20% larger, 0.8 = 20% smaller
 static const float TOOLTIP_FONT_SCALE = 1.0f;
 // Optional: Set to a specific ImFont* to use a different font for tooltips (nullptr = use default)
 static ImFont* TOOLTIP_FONT = nullptr;
 
-// Helper function for consistent tooltips with proper padding
+// Macro to start a custom tooltip with proper padding
+#define BEGIN_TOOLTIP() \
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, TOOLTIP_PADDING); \
+    ImGui::BeginTooltip(); \
+    if (TOOLTIP_FONT != nullptr) ImGui::PushFont(TOOLTIP_FONT); \
+    ImGui::SetWindowFontScale(TOOLTIP_FONT_SCALE); \
+    ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+
+#define END_TOOLTIP() \
+    ImGui::PopTextWrapPos(); \
+    if (TOOLTIP_FONT != nullptr) ImGui::PopFont(); \
+    ImGui::EndTooltip(); \
+    ImGui::PopStyleVar();
+
+// Helper function for simple one-line tooltips
 inline void ShowTooltip(const char* text) {
-    if (ImGui::IsItemHovered()) {
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, TOOLTIP_PADDING);
-        ImGui::BeginTooltip();
-
-        // Use custom font if specified
-        if (TOOLTIP_FONT != nullptr) {
-            ImGui::PushFont(TOOLTIP_FONT);
-        }
-
-        ImGui::SetWindowFontScale(TOOLTIP_FONT_SCALE);  // Control tooltip font size
-        ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
-        ImGui::TextUnformatted(text);
-        ImGui::PopTextWrapPos();
-
-        if (TOOLTIP_FONT != nullptr) {
-            ImGui::PopFont();
-        }
-
-        ImGui::EndTooltip();
-        ImGui::PopStyleVar();
+    // IsItemHovered() without flags won't trigger on disabled items by default
+    // This is the correct way to handle tooltips with disabled widgets
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal)) {
+        BEGIN_TOOLTIP()
+            ImGui::TextUnformatted(text);
+        END_TOOLTIP()
     }
 }
 
@@ -363,10 +565,20 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
         return 1;
     }
 
+    // Initialize GoblinMode (experimental chaos engine)
+    std::cout << "[Startup] Initializing Goblin Mode..." << std::endl;
+    if (!goblinMode.Initialize("dectalk.dll", WAVE_MAPPER)) {
+        std::cout << "[Startup] WARNING: Goblin Mode initialization failed! Goblin mode will be disabled." << std::endl;
+    }
+
     // Initialize message handler
     std::cout << "[Startup] Initializing message handler..." << std::endl;
     messageHandler = std::make_unique<TwitchMessageHandler>(dectalk);
     messageHandler->SetTwitchAuth(&twitchAuth);
+    messageHandler->SetGoblinMode(&goblinMode);  // Connect Goblin Mode system
+    messageHandler->SetTTSMode(TTSMode::KeepUp); // Default to Pace mode
+    messageHandler->bannedUsernames = &bannedUsernames;  // Connect filter lists
+    messageHandler->bannedWords = &bannedWords;
 
     // Set up callbacks from TwitchAuth to message handler
     twitchAuth.SetOnRawMessageCallback([](const std::string& rawMsg) {
@@ -434,6 +646,9 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
     // Start the message handler
     messageHandler->Start();
     std::cout << "[Startup] Message handler started" << std::endl;
+
+    // Load settings
+    LoadSettings();
 
     // Create borderless application window
     WNDCLASSEXW wc = { sizeof(wc), CS_CLASSDC, WndProc, 0L, 0L, hInstance, nullptr, nullptr,
@@ -745,7 +960,7 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
             IM_COL32(192, 192, 192, 255));
 
         // Menu items - Win98 style (flat by default, raised on hover)
-        const char* menuItems[] = { "File", "Edit", "About" };
+        const char* menuItems[] = { "File", "Edit", "Help" };
         float menuX = menuBarMin.x + 4;
 
         // ===== MENU ITEM PADDING (adjust border spacing here) =====
@@ -784,16 +999,179 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
                 ImVec2(textPos.x + firstCharSize.x, underlineY),
                 IM_COL32(0, 0, 0, 255), 1.0f);
 
+            // Click handling
             if (isClicked) {
-                // TODO: Open menu dropdown
+                if (openMenuIndex == i) {
+                    openMenuIndex = -1;  // Close if clicking same menu
+                    justOpenedMenu = false;
+                }
+                else {
+                    openMenuIndex = i;  // Open menu
+                    justOpenedMenu = true;  // Flag to prevent immediate close
+                }
+            }
+
+            // Draw dropdown if this menu is open
+            if (openMenuIndex == i) {
+                ImVec2 dropdownMin = ImVec2(itemMin.x, itemMax.y);
+                float dropdownWidth = 180;
+
+                // Menu items for each dropdown
+                const char* fileMenuItems[] = { "Save Settings", "Load Settings", "Backup Settings", nullptr, "Exit" };
+                const char* editMenuItems[] = { "Clear Filters", "Reset to Defaults" };
+                const char* helpMenuItems[] = { "About Gobtalk", nullptr, "GitHub Project", "My Website" };
+
+                const char** menuItemsList = nullptr;
+                int menuItemsCount = 0;
+
+                if (i == 0) { // File
+                    menuItemsList = fileMenuItems;
+                    menuItemsCount = 5;
+                }
+                else if (i == 1) { // Edit
+                    menuItemsList = editMenuItems;
+                    menuItemsCount = 2;
+                }
+                else if (i == 2) { // Help
+                    menuItemsList = helpMenuItems;
+                    menuItemsCount = 4;
+                }
+
+                if (menuItemsList) {
+                    float itemHeight = 20;
+                    float dropdownHeight = itemHeight * menuItemsCount;
+                    ImVec2 dropdownMax = ImVec2(dropdownMin.x + dropdownWidth, dropdownMin.y + dropdownHeight);
+
+                    // Dropdown background
+                    draw_list->AddRectFilled(dropdownMin, dropdownMax, IM_COL32(192, 192, 192, 255));
+                    DrawWin98Border(draw_list, dropdownMin, dropdownMax, false);
+
+                    // Menu items
+                    for (int j = 0; j < menuItemsCount; j++) {
+                        if (menuItemsList[j] == nullptr) {
+                            // Separator
+                            float sepY = dropdownMin.y + (j * itemHeight) + itemHeight / 2;
+                            draw_list->AddLine(ImVec2(dropdownMin.x + 4, sepY),
+                                ImVec2(dropdownMax.x - 4, sepY),
+                                IM_COL32(128, 128, 128, 255), 1.0f);
+                            continue;
+                        }
+
+                        ImVec2 menuItemMin = ImVec2(dropdownMin.x, dropdownMin.y + (j * itemHeight));
+                        ImVec2 menuItemMax = ImVec2(dropdownMax.x, menuItemMin.y + itemHeight);
+
+                        bool menuItemHovered = ImGui::IsMouseHoveringRect(menuItemMin, menuItemMax);
+                        bool menuItemClicked = menuItemHovered && ImGui::IsMouseClicked(0);
+
+                        // Hover highlight
+                        if (menuItemHovered) {
+                            draw_list->AddRectFilled(menuItemMin, menuItemMax, IM_COL32(0, 0, 128, 255));
+                        }
+
+                        // Text
+                        ImU32 menuTextColor = menuItemHovered ? IM_COL32(255, 255, 255, 255) : IM_COL32(0, 0, 0, 255);
+                        draw_list->AddText(ImVec2(menuItemMin.x + 8, menuItemMin.y + 3),
+                            menuTextColor, menuItemsList[j]);
+
+                        // Handle menu item clicks
+                        if (menuItemClicked) {
+                            openMenuIndex = -1;  // Close menu
+                            justOpenedMenu = false;  // Reset flag
+
+                            // Execute menu action
+                            if (i == 0) { // File menu
+                                if (j == 0) { SaveSettings(); }  // Save Settings
+                                else if (j == 1) { LoadSettings(); }  // Load Settings
+                                else if (j == 2) { // Backup Settings
+                                    char timestamp[64];
+                                    time_t now = time(nullptr);
+                                    struct tm timeinfo;
+                                    localtime_s(&timeinfo, &now);
+                                    strftime(timestamp, sizeof(timestamp), "%Y%m%d_%H%M%S", &timeinfo);
+                                    std::string backupFile = "gobtalk_backup_" + std::string(timestamp) + ".ini";
+                                    SaveSettings(backupFile.c_str());
+                                }
+                                else if (j == 4) { done = true; } // Exit
+                            }
+                            else if (i == 1) { // Edit menu
+                                if (j == 0) { // Clear Filters
+                                    bannedUsernames.clear();
+                                    bannedWords.clear();
+                                    bannedUsernamesText[0] = '\0';
+                                    bannedWordsText[0] = '\0';
+                                }
+                                else if (j == 1) { // Reset to Defaults
+                                    selectedVoice = 0;
+                                    dectalk.SetVoice(0);
+                                    goblinMode.SetVoice(0);
+                                    volume = 100;
+                                    dectalk.SetVolume(100);
+                                    goblinMode.SetVolume(100);
+                                    selectedQueueMode = 1; // Pace mode
+                                    if (messageHandler) {
+                                        messageHandler->SetTTSMode(TTSMode::KeepUp);
+                                        messageHandler->enableChatMessages = true;
+                                        messageHandler->enableSayCommand = false;
+                                        messageHandler->readUsername = true;
+                                        messageHandler->roleFilterMode = TwitchMessageHandler::RoleFilterMode::Everyone;
+                                        messageHandler->enableSubscriberAnnouncements = true;
+                                        messageHandler->enableFollowerAnnouncements = true;
+                                        messageHandler->enableBitsAnnouncements = true;
+                                        messageHandler->enableChannelPointRedeems = true;
+                                    }
+                                    bannedUsernames.clear();
+                                    bannedWords.clear();
+                                    bannedUsernamesText[0] = '\0';
+                                    bannedWordsText[0] = '\0';
+                                    std::cout << "[Settings] Reset to defaults" << std::endl;
+                                }
+                            }
+                            else if (i == 2) { // Help menu
+                                if (j == 0) { // About Gobtalk
+                                    showAboutDialog = true;
+                                }
+                                else if (j == 2) { // GitHub Project
+                                    ShellExecuteA(NULL, "open", "https://github.com/yourusername/gobtalk", NULL, NULL, SW_SHOWNORMAL);
+                                }
+                                else if (j == 3) { // My Website
+                                    ShellExecuteA(NULL, "open", "https://yourwebsite.com", NULL, NULL, SW_SHOWNORMAL);
+                                }
+                            }
+                        }
+                    }
+                }
             }
 
             menuX += menuItemWidth + 1;
         }
 
+        // Close menu if clicked outside menu area (but not on the same frame we opened it)
+        if (openMenuIndex != -1 && ImGui::IsMouseClicked(0) && !justOpenedMenu) {
+            // Get mouse position
+            ImVec2 mousePos = ImGui::GetMousePos();
+
+            // Check if click was in menu bar area
+            bool clickedInMenuBar = (mousePos.y >= menuBarMin.y &&
+                mousePos.y <= menuBarMin.y + menuBarSize.y);
+
+            // Check if click was in dropdown area (approximately)
+            bool clickedInDropdown = (mousePos.y > menuBarMin.y + menuBarSize.y &&
+                mousePos.y < menuBarMin.y + menuBarSize.y + 200);
+
+            // Close menu only if clicked outside both menu bar and dropdown
+            if (!clickedInMenuBar && !clickedInDropdown) {
+                openMenuIndex = -1;
+            }
+        }
+
+        // Reset the justOpenedMenu flag after checking
+        if (justOpenedMenu && !ImGui::IsMouseClicked(0)) {
+            justOpenedMenu = false;
+        }
+
         // STEP 4: Tab Bar (Win98 paper-tab style)
         static int selectedTab = 0;
-        const char* tabNames[] = { "Voice Settings", "Options", "Connections" };
+        const char* tabNames[] = { "Voice Settings", "Options", "Connections", "Filters" };
         float tabBarY = menuBarY + menuBarHeight;
         ImVec2 tabBarMin = ImVec2(outerBorderWidth, tabBarY);
 
@@ -916,6 +1294,7 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
                 if (ImGui::RadioButton(voiceNames[i], &selectedVoice, i))
                 {
                     dectalk.SetVoice(i);
+                    goblinMode.SetVoice(i);  // Sync to Goblin Mode
                 }
                 if ((i + 1) % 3 != 0) ImGui::SameLine();
             }
@@ -930,7 +1309,27 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
             if (ImGui::SliderInt("##volume", &volume, 0, 100))
             {
                 dectalk.SetVolume(volume);
+                goblinMode.SetVolume(volume);  // Sync to Goblin Mode
             }
+
+            ImGui::Spacing();
+
+            ImGui::Text("Queue Mode:");
+            ImGui::SameLine(80);
+            ImGui::SetNextItemWidth(150);
+            if (ImGui::Combo("##queuemode", &selectedQueueMode, queueModeNames, IM_ARRAYSIZE(queueModeNames)))
+            {
+                // Map UI selection to TTSMode enum
+                TTSMode mode;
+                switch (selectedQueueMode) {
+                case 0: mode = TTSMode::Queue; break;
+                case 1: mode = TTSMode::KeepUp; break;  // Pace
+                case 2: mode = TTSMode::Goblin; break;
+                default: mode = TTSMode::KeepUp; break;
+                }
+                messageHandler->SetTTSMode(mode);
+            }
+            ShowTooltip("Queue: Read all messages in order\nPace: Skip old messages, read latest\nGoblin: Read all messages simultaneously (chaos!)");
 
             ImGui::Spacing();
             ImGui::Separator();
@@ -971,192 +1370,100 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
             ConnectionStatus currentStatus = twitchAuth.GetStatus();
             bool isConnected = (currentStatus == ConnectionStatus::Connected);
             bool isConnecting = (currentStatus == ConnectionStatus::Connecting);
-            bool isError = (currentStatus == ConnectionStatus::Error);
-            bool isDisconnected = (currentStatus == ConnectionStatus::Disconnected);
-
-            // Check if disconnect is in progress via atomic flag
             bool disconnecting = twitchAuth.IsDisconnecting() || eventSub.IsDisconnecting();
 
-            // ========== IRC CONNECTION STATUS ==========
-            ImGui::Text("IRC Status:");
-            ImGui::SameLine();
-
-            // Color-coded status indicator
-            if (isConnected) {
-                ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "● CONNECTED");
-            }
-            else if (isConnecting) {
-                ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "● CONNECTING...");
-            }
-            else if (isError) {
-                ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "● ERROR");
-            }
-            else if (disconnecting) {
-                ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "● DISCONNECTING...");
-            }
-            else {
-                ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "● DISCONNECTED");
-            }
-
-            // Status message
-            ImGui::Indent(20);
-            std::string statusMsg = twitchAuth.GetStatusMessage();
-            if (!statusMsg.empty()) {
-                if (isError) {
-                    ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s", statusMsg.c_str());
-                }
-                else if (isConnected) {
-                    ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "%s", statusMsg.c_str());
-                }
-                else {
-                    ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "%s", statusMsg.c_str());
-                }
-            }
-            ImGui::Unindent(20);
-
-            ImGui::Spacing();
-
-            // ========== EVENTSUB STATUS ==========
-            ImGui::Text("EventSub Status:");
-            ImGui::SameLine();
-
-            bool eventSubConnected = eventSub.IsConnected();
-            if (isConnected && eventSubConnected) {
-                ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "● CONNECTED");
-            }
-            else if (isConnected && !eventSubConnected) {
-                ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "● CONNECTING...");
-            }
-            else if (disconnecting) {
-                ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "● DISCONNECTING...");
-            }
-            else {
-                ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "● DISCONNECTED");
-            }
-
-            ImGui::Indent(20);
-            if (isConnected && eventSubConnected) {
-                ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "Real-time follower notifications active");
-            }
-            else if (isConnected && !eventSubConnected) {
-                ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.0f, 1.0f), "Attempting WebSocket connection...");
-            }
-            else {
-                ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "Not connected");
-            }
-            ImGui::Unindent(20);
-
-            ImGui::Spacing();
-            ImGui::Separator();
-            ImGui::Spacing();
-
-            // ========== CONNECT BUTTON ==========
-            const char* buttonText = isConnected ? "Connected to Twitch" :
+            // ========== BUTTONS SIDE BY SIDE ==========
+            const char* connectButtonText = isConnected ? "Connected" :
                 isConnecting ? "Connecting..." :
                 "Connect To Twitch";
 
-            // Disable button while connecting or disconnecting
-            bool buttonEnabled = !isConnecting && !disconnecting;
-            if (!buttonEnabled) {
+            // Connect button (left)
+            bool connectEnabled = !isConnecting && !disconnecting;
+            if (!connectEnabled) {
                 ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.6f);
             }
 
-            if (Win98Button(buttonText, ImVec2(200, 30)) && buttonEnabled)
+            if (Win98Button(connectButtonText, ImVec2(150, 30)) && connectEnabled)
             {
                 if (!twitchAuth.IsAuthenticated()) {
-                    // Not authenticated - start OAuth flow (will auto-connect after)
                     std::cout << "[UI] Starting authentication flow..." << std::endl;
                     twitchAuth.StartAuthentication();
                 }
                 else if (!isConnected && !isConnecting) {
-                    // Authenticated but not connected - reconnect to user's channel
-                    std::cout << "[UI] Initiating connection to channel: " << twitchAuth.GetUsername() << std::endl;
+                    std::cout << "[UI] Connecting to channel: " << twitchAuth.GetUsername() << std::endl;
                     twitchAuth.Connect(twitchAuth.GetUsername());
                 }
             }
 
-            if (!buttonEnabled) {
+            if (!connectEnabled) {
                 ImGui::PopStyleVar();
             }
 
-            if (ImGui::IsItemHovered()) {
-                if (isConnected) {
-                    ImGui::SetTooltip("Already connected to Twitch IRC");
-                }
-                else if (isConnecting) {
-                    ImGui::SetTooltip("Connection in progress, please wait...");
-                }
-                else if (disconnecting) {
-                    ImGui::SetTooltip("Disconnection in progress, please wait...");
-                }
-                else {
-                    ImGui::SetTooltip("Click to authenticate and connect to Twitch");
-                }
-            }
-
-            ImGui::Spacing();
-
-            // ========== DISCONNECT BUTTON ==========
+            // Disconnect button (right, same line)
             if (twitchAuth.IsAuthenticated()) {
+                ImGui::SameLine();
+
                 bool disconnectEnabled = !disconnecting && !isConnecting;
                 if (!disconnectEnabled) {
                     ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.6f);
                 }
 
-                if (Win98Button("Disconnect & Clear Credentials", ImVec2(200, 30)) && disconnectEnabled) {
-                    std::cout << "[UI] ========================================" << std::endl;
-                    std::cout << "[UI] Starting disconnect and credential clear..." << std::endl;
-                    std::cout << "[UI] ========================================" << std::endl;
+                if (Win98Button("Disconnect", ImVec2(150, 30)) && disconnectEnabled) {
+                    std::cout << "[UI] Starting disconnect..." << std::endl;
 
-                    // Do disconnect in separate thread to avoid blocking UI
                     std::thread([]() {
-                        std::cout << "[Disconnect] Step 1/3: Disconnecting from Twitch IRC..." << std::endl;
                         twitchAuth.Disconnect();
-                        std::cout << "[Disconnect] Step 1/3: Complete ✓" << std::endl;
-
-                        std::cout << "[Disconnect] Step 2/3: Disconnecting from EventSub..." << std::endl;
                         eventSub.Disconnect();
-                        std::cout << "[Disconnect] Step 2/3: Complete ✓" << std::endl;
-
-                        std::cout << "[Disconnect] Step 3/3: Revoking credentials..." << std::endl;
                         twitchAuth.RevokeAuthentication();
-                        std::cout << "[Disconnect] Step 3/3: Complete ✓" << std::endl;
-
-                        std::cout << "[UI] ========================================" << std::endl;
                         std::cout << "[UI] Disconnect complete!" << std::endl;
-                        std::cout << "[UI] Click 'Connect To Twitch' to re-authenticate" << std::endl;
-                        std::cout << "[UI] ========================================" << std::endl;
                         }).detach();
                 }
 
                 if (!disconnectEnabled) {
                     ImGui::PopStyleVar();
                 }
-
-                if (ImGui::IsItemHovered()) {
-                    if (disconnecting) {
-                        ImGui::SetTooltip("Disconnection in progress, please wait...");
-                    }
-                    else if (isConnecting) {
-                        ImGui::SetTooltip("Cannot disconnect while connecting");
-                    }
-                    else {
-                        ImGui::SetTooltip("Disconnect and clear saved credentials.\nUse this to re-authenticate or fix OAuth issues.");
-                    }
-                }
             }
 
             ImGui::Spacing();
             ImGui::Separator();
             ImGui::Spacing();
 
-            // ========== CONNECTION INFO ==========
-            if (twitchAuth.IsAuthenticated()) {
-                ImGui::Text("Account Info:");
-                ImGui::Indent(20);
-                ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "Username: %s", twitchAuth.GetUsername().c_str());
-                ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "User ID: %s", twitchAuth.GetUserId().c_str());
-                ImGui::Unindent(20);
+            // ========== STATUS WITH ICON ==========
+            ImGui::Text("Status:");
+            ImGui::SameLine();
+
+            // Display icon
+            ID3D11ShaderResourceView* statusIcon = isConnected ? g_iconConnected : g_iconNoNetwork;
+            if (statusIcon) {
+                ImGui::Image((void*)statusIcon, ImVec2(16, 16));
+                ImGui::SameLine();
+            }
+
+            // Status text
+            if (isConnected) {
+                ImGui::TextColored(ImVec4(0.0f, 0.8f, 0.0f, 1.0f), "Connected");
+            }
+            else if (isConnecting) {
+                ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "Connecting...");
+            }
+            else if (disconnecting) {
+                ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "Disconnecting...");
+            }
+            else {
+                ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "Disconnected");
+            }
+
+            ImGui::Spacing();
+
+            // EventSub status
+            bool eventSubConnected = eventSub.IsConnected();
+            ImGui::Text("EventSub:");
+            ImGui::SameLine();
+            if (isConnected && eventSubConnected) {
+                ImGui::TextColored(ImVec4(0.0f, 0.8f, 0.0f, 1.0f), "Active");
+            }
+            else {
+                ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "Inactive");
             }
         }
         else if (selectedTab == 1) {
@@ -1229,37 +1536,27 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
             BEGIN_CHECKBOX_STYLE();
             ImGui::Checkbox("Followers", &messageHandler->allowFollowers);
             END_CHECKBOX_STYLE();
-            if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("Allow messages from followers (currently allows everyone - EventSub needed)");
-            }
+            ShowTooltip("Allow messages from followers (currently allows everyone - EventSub needed)");
 
             BEGIN_CHECKBOX_STYLE();
             ImGui::Checkbox("Subscribers##rolefilter", &messageHandler->allowSubscribers);
             END_CHECKBOX_STYLE();
-            if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("Allow messages from channel subscribers");
-            }
+            ShowTooltip("Allow messages from channel subscribers");
 
             BEGIN_CHECKBOX_STYLE();
             ImGui::Checkbox("Turbo Users", &messageHandler->allowTurbo);
             END_CHECKBOX_STYLE();
-            if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("Allow messages from Twitch Turbo users");
-            }
+            ShowTooltip("Allow messages from Twitch Turbo users");
 
             BEGIN_CHECKBOX_STYLE();
             ImGui::Checkbox("Moderators", &messageHandler->allowMods);
             END_CHECKBOX_STYLE();
-            if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("Allow messages from channel moderators");
-            }
+            ShowTooltip("Allow messages from channel moderators");
 
             BEGIN_CHECKBOX_STYLE();
             ImGui::Checkbox("VIPs", &messageHandler->allowVIPs);
             END_CHECKBOX_STYLE();
-            if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("Allow messages from channel VIPs");
-            }
+            ShowTooltip("Allow messages from channel VIPs");
 
             // End role checkbox disabled state
             if (roleFilterSelection == 0) {
@@ -1285,9 +1582,7 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
             BEGIN_CHECKBOX_STYLE();
             ImGui::Checkbox("Subscribers##announcements", &messageHandler->enableSubscriberAnnouncements);
             END_CHECKBOX_STYLE();
-            if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("Announce new subscriptions and resubscriptions");
-            }
+            ShowTooltip("Announce new subscriptions and resubscriptions");
 
             // Always show options, grey them out when disabled
             ImGui::Indent(20);
@@ -1302,9 +1597,7 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
             if (ImGui::InputText("##submsg", subBuffer, sizeof(subBuffer))) {
                 messageHandler->subscriberMessage = subBuffer;
             }
-            if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("Use {username} as placeholder. Example: {username} just subscribed!");
-            }
+            ShowTooltip("Use {username} as placeholder. Example: {username} just subscribed!");
 
             ImGui::Text("Resubscription Message:");
             ImGui::SetNextItemWidth(-1); // Full width
@@ -1313,9 +1606,7 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
             if (ImGui::InputText("##resubmsg", resubBuffer, sizeof(resubBuffer))) {
                 messageHandler->resubscriberMessage = resubBuffer;
             }
-            if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("Use {username} and {months} as placeholders. Example: {username} resubscribed for {months} months!");
-            }
+            ShowTooltip("Use {username} and {months} as placeholders. Example: {username} resubscribed for {months} months!");
 
             if (!messageHandler->enableSubscriberAnnouncements) {
                 ImGui::EndDisabled();
@@ -1328,9 +1619,7 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
             BEGIN_CHECKBOX_STYLE();
             ImGui::Checkbox("Follower Announcements", &messageHandler->enableFollowerAnnouncements);
             END_CHECKBOX_STYLE();
-            if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("Announce new followers via Twitch EventSub WebSocket");
-            }
+            ShowTooltip("Announce new followers via Twitch EventSub WebSocket");
 
             // Always show options, grey them out when disabled
             ImGui::Indent(20);
@@ -1345,9 +1634,7 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
             if (ImGui::InputText("##followmsg", followerBuffer, sizeof(followerBuffer))) {
                 messageHandler->followerMessage = followerBuffer;
             }
-            if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("Use {username} as placeholder. Example: {username} just followed!");
-            }
+            ShowTooltip("Use {username} as placeholder. Example: {username} just followed!");
 
             if (!messageHandler->enableFollowerAnnouncements) {
                 ImGui::EndDisabled();
@@ -1360,9 +1647,7 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
             BEGIN_CHECKBOX_STYLE();
             ImGui::Checkbox("Bits/Cheers", &messageHandler->enableBitsAnnouncements);
             END_CHECKBOX_STYLE();
-            if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("Announce bit cheers");
-            }
+            ShowTooltip("Announce bit cheers");
 
             // Always show options, grey them out when disabled
             ImGui::Indent(20);
@@ -1387,9 +1672,7 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
             BEGIN_CHECKBOX_STYLE();
             ImGui::Checkbox("Channel Point Redeems", &messageHandler->enableChannelPointRedeems);
             END_CHECKBOX_STYLE();
-            if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("Read messages from specific channel point reward redemptions");
-            }
+            ShowTooltip("Read messages from specific channel point reward redemptions");
 
             // Always show options, grey them out when disabled
             ImGui::Indent(20);
@@ -1404,7 +1687,10 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
                 eventSub.SetRewardNameFilter(channelPointRewardName);
             }
             if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("Enter the exact name of the reward to listen for (case-sensitive).\nWhen this reward is redeemed, the TTS will read the user's message.");
+                BEGIN_TOOLTIP()
+                    ImGui::Text("Enter the exact name of the reward to listen for (case-sensitive).");
+                ImGui::Text("When this reward is redeemed, the TTS will read the user's message.");
+                END_TOOLTIP()
             }
 
             if (!messageHandler->enableChannelPointRedeems) {
@@ -1428,9 +1714,50 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
             ImGui::EndDisabled();
             ImGui::SameLine();
             ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "(Coming Soon)");
-            if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("Announce donations (requires external service integration)");
+            ShowTooltip("Announce donations (requires external service integration)");
+        }
+        else if (selectedTab == 3) {
+            // Filters tab content
+            ImGui::Text("Username Blacklist");
+            ImGui::Separator();
+            ImGui::Spacing();
+
+            ImGui::Text("Block messages from specific usernames (one per line):");
+            ImGui::Spacing();
+
+            // Multiline input for usernames
+            ImGui::Text("Banned Usernames:");
+            if (ImGui::InputTextMultiline("##usernamelist", bannedUsernamesText, sizeof(bannedUsernamesText),
+                ImVec2(400, 150), ImGuiInputTextFlags_AllowTabInput)) {
+                UpdateBannedUsernamesFromText();
             }
+            ShowTooltip("Enter one username per line.\nChanges are applied automatically.");
+
+            ImGui::Spacing();
+            ImGui::Text("Current Count: %zu", bannedUsernames.size());
+
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+
+            // Banned Words section
+            ImGui::Text("Banned Words");
+            ImGui::Separator();
+            ImGui::Spacing();
+
+            ImGui::Text("Filter messages containing these words (one per line):");
+            ImGui::Spacing();
+
+            // Multiline input for words
+            ImGui::Text("Banned Words:");
+            if (ImGui::InputTextMultiline("##wordlist", bannedWordsText, sizeof(bannedWordsText),
+                ImVec2(400, 150), ImGuiInputTextFlags_AllowTabInput)) {
+                UpdateBannedWordsFromText();
+            }
+            ShowTooltip("Enter one word per line.\nChanges are applied automatically.");
+
+            ImGui::Spacing();
+            ImGui::Text("Current Count: %zu", bannedWords.size());
         }
 
         ImGui::EndChild(); // TabContent
@@ -1441,6 +1768,43 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
 
         ImGui::PopFont(); // Pop regular font
 
+        // About Dialog (Win98 style modal)
+        if (showAboutDialog) {
+            ImGui::OpenPopup("About Gobtalk");
+            ImVec2 center = ImGui::GetMainViewport()->GetCenter();
+            ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+
+            if (ImGui::BeginPopupModal("About Gobtalk", &showAboutDialog, ImGuiWindowFlags_AlwaysAutoResize)) {
+                ImGui::PushFont(fontBold);
+                ImGui::Text("Gobtalk - DECtalk Interface");
+                ImGui::PopFont();
+
+                ImGui::Separator();
+                ImGui::Spacing();
+
+                ImGui::Text("Version: 1.0.0");
+                ImGui::Text("A Windows 98-styled TTS interface for Twitch");
+                ImGui::Spacing();
+                ImGui::Text("Features:");
+                ImGui::BulletText("DECtalk voice synthesis");
+                ImGui::BulletText("Twitch chat integration");
+                ImGui::BulletText("Multiple TTS modes (Queue, Pace, Goblin)");
+                ImGui::BulletText("Username & word filtering");
+                ImGui::BulletText("Customizable announcements");
+
+                ImGui::Spacing();
+                ImGui::Separator();
+                ImGui::Spacing();
+
+                if (Win98Button("OK", ImVec2(120, 25))) {
+                    showAboutDialog = false;
+                    ImGui::CloseCurrentPopup();
+                }
+
+                ImGui::EndPopup();
+            }
+        }
+
         // Rendering
         ImGui::Render();
         const float clear_color_with_alpha[4] = { 0.76f, 0.76f, 0.76f, 1.00f };
@@ -1450,6 +1814,10 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
 
         g_pSwapChain->Present(1, 0);
     }
+
+    // Auto-save settings before exit
+    std::cout << "[Shutdown] Auto-saving settings..." << std::endl;
+    SaveSettings();
 
     // Cleanup
     if (g_iconNoNetwork) { g_iconNoNetwork->Release(); g_iconNoNetwork = nullptr; }

@@ -6,10 +6,12 @@
 #include <iostream>
 #include <sstream>
 #include <algorithm>
+#include"Goblinmode.h"
 
 TwitchMessageHandler::TwitchMessageHandler(DECtalkWrapper& dectalk)
     : m_dectalk(dectalk)
     , m_twitchAuth(nullptr)
+    , m_goblinMode(nullptr)
     , m_ttsMode(TTSMode::Queue)
     , m_running(false)
 {
@@ -27,6 +29,12 @@ void TwitchMessageHandler::SetTwitchAuth(TwitchAuth* auth)
 
     // Set up callback for raw IRC messages so we can parse tags
     // Note: We'll need to modify TwitchAuth to provide raw messages
+}
+
+void TwitchMessageHandler::SetGoblinMode(GoblinMode* goblin)
+{
+    m_goblinMode = goblin;
+    std::cout << "[MessageHandler] Goblin Mode linked!" << std::endl;
 }
 
 void TwitchMessageHandler::Start()
@@ -311,6 +319,37 @@ void TwitchMessageHandler::ProcessChatMessage(const ExtendedChatMessage& msg)
         return;
     }
 
+    // Check if username is banned
+    if (bannedUsernames) {
+        for (const auto& bannedUser : *bannedUsernames) {
+            // Case-insensitive comparison
+            std::string lowerUsername = msg.username;
+            std::string lowerBanned = bannedUser;
+            std::transform(lowerUsername.begin(), lowerUsername.end(), lowerUsername.begin(), ::tolower);
+            std::transform(lowerBanned.begin(), lowerBanned.end(), lowerBanned.begin(), ::tolower);
+
+            if (lowerUsername == lowerBanned) {
+                std::cout << "[MessageHandler] Skipping message from banned user: " << msg.username << std::endl;
+                return;
+            }
+        }
+    }
+
+    // Check if message contains banned words
+    if (bannedWords) {
+        for (const auto& bannedWord : *bannedWords) {
+            std::string lowerMessage = msg.message;
+            std::string lowerBanned = bannedWord;
+            std::transform(lowerMessage.begin(), lowerMessage.end(), lowerMessage.begin(), ::tolower);
+            std::transform(lowerBanned.begin(), lowerBanned.end(), lowerBanned.begin(), ::tolower);
+
+            if (lowerMessage.find(lowerBanned) != std::string::npos) {
+                std::cout << "[MessageHandler] Skipping message containing banned word: " << bannedWord << std::endl;
+                return;
+            }
+        }
+    }
+
     // Check if !say command is REQUIRED
     if (enableSayCommand) {
         // !say command is REQUIRED - only process messages starting with !say
@@ -533,8 +572,16 @@ void TwitchMessageHandler::QueueTTS(const std::string& text)
 
 void TwitchMessageHandler::SpeakImmediate(const std::string& text)
 {
-    // For Goblin mode - speak without waiting
-    m_dectalk.Speak(text);
+    // For Goblin mode - use the dedicated GoblinMode system
+    if (m_goblinMode) {
+        std::cout << "[MessageHandler] Routing to Goblin Mode: " << text.substr(0, 30) << "..." << std::endl;
+        m_goblinMode->SpeakChaos(text);
+    }
+    else {
+        std::cerr << "[MessageHandler] ERROR: Goblin Mode not initialized!" << std::endl;
+        // Fallback to regular speech
+        m_dectalk.SpeakAsync(text);
+    }
 }
 
 void TwitchMessageHandler::ProcessLoop()

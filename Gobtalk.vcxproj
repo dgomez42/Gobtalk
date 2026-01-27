@@ -130,6 +130,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="DECtalkWrapper.cpp" />
+    <ClCompile Include="Goblinmode.cpp" />
     <ClCompile Include="imgui\imgui.cpp" />
     <ClCompile Include="imgui\imgui_impl_dx11.cpp" />
     <ClCompile Include="imgui\imgui_impl_win32.cpp" />
@@ -152,6 +153,7 @@
   <ItemGroup>
     <ClInclude Include="DECtalkWrapper.h" />
     <ClInclude Include="framework.h" />
+    <ClInclude Include="Goblinmode.h" />
     <ClInclude Include="imgui\imgui.h" />
     <ClInclude Include="imgui\imgui_impl_dx11.h" />
     <ClInclude Include="imgui\imgui_impl_win32.h" />
