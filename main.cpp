@@ -656,7 +656,7 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
     ::RegisterClassExW(&wc);
     HWND hwnd = ::CreateWindowExW(0, wc.lpszClassName, L"Gobtalk - DECtalk Interface",
         WS_POPUP | WS_THICKFRAME, // Borderless but resizable
-        100, 100, 600, 500, nullptr, nullptr, wc.hInstance, nullptr);
+        100, 100, 700, 750, nullptr, nullptr, wc.hInstance, nullptr);
 
     // Remove rounded corners (Windows 11)
     DWM_WINDOW_CORNER_PREFERENCE cornerPref = DWMWCP_DONOTROUND;
@@ -691,8 +691,8 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
     ImFont* fontBold = nullptr;
 
     // Try to load custom fonts
-    fontRegular = io.Fonts->AddFontFromFileTTF("MS Sans Serif.ttf", 12.0f, &fontConfig);
-    fontBold = io.Fonts->AddFontFromFileTTF("MS Sans Serif Bold.ttf", 14.0f, &fontConfig);
+    io.Fonts->AddFontFromFileTTF("data/fonts/MS Sans Serif.ttf", 13.0f);
+    fontBold = io.Fonts->AddFontFromFileTTF("data/fonts/MS Sans Serif Bold.ttf", 13.0f);
 
     // Optional: Load a larger font specifically for tooltips (uncomment to enable)
     // ImFont* tooltipFont = io.Fonts->AddFontFromFileTTF("MS Sans Serif.ttf", 16.0f, &fontConfig);
@@ -1016,6 +1016,9 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
                 ImVec2 dropdownMin = ImVec2(itemMin.x, itemMax.y);
                 float dropdownWidth = 180;
 
+                // Use FOREGROUND draw list so dropdown appears on top of everything
+                ImDrawList* fg_draw_list = ImGui::GetForegroundDrawList();
+
                 // Menu items for each dropdown
                 const char* fileMenuItems[] = { "Save Settings", "Load Settings", "Backup Settings", nullptr, "Exit" };
                 const char* editMenuItems[] = { "Clear Filters", "Reset to Defaults" };
@@ -1043,15 +1046,15 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
                     ImVec2 dropdownMax = ImVec2(dropdownMin.x + dropdownWidth, dropdownMin.y + dropdownHeight);
 
                     // Dropdown background
-                    draw_list->AddRectFilled(dropdownMin, dropdownMax, IM_COL32(192, 192, 192, 255));
-                    DrawWin98Border(draw_list, dropdownMin, dropdownMax, false);
+                    fg_draw_list->AddRectFilled(dropdownMin, dropdownMax, IM_COL32(192, 192, 192, 255));
+                    DrawWin98Border(fg_draw_list, dropdownMin, dropdownMax, false);
 
                     // Menu items
                     for (int j = 0; j < menuItemsCount; j++) {
                         if (menuItemsList[j] == nullptr) {
                             // Separator
                             float sepY = dropdownMin.y + (j * itemHeight) + itemHeight / 2;
-                            draw_list->AddLine(ImVec2(dropdownMin.x + 4, sepY),
+                            fg_draw_list->AddLine(ImVec2(dropdownMin.x + 4, sepY),
                                 ImVec2(dropdownMax.x - 4, sepY),
                                 IM_COL32(128, 128, 128, 255), 1.0f);
                             continue;
@@ -1065,12 +1068,12 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
 
                         // Hover highlight
                         if (menuItemHovered) {
-                            draw_list->AddRectFilled(menuItemMin, menuItemMax, IM_COL32(0, 0, 128, 255));
+                            fg_draw_list->AddRectFilled(menuItemMin, menuItemMax, IM_COL32(0, 0, 128, 255));
                         }
 
                         // Text
                         ImU32 menuTextColor = menuItemHovered ? IM_COL32(255, 255, 255, 255) : IM_COL32(0, 0, 0, 255);
-                        draw_list->AddText(ImVec2(menuItemMin.x + 8, menuItemMin.y + 3),
+                        fg_draw_list->AddText(ImVec2(menuItemMin.x + 8, menuItemMin.y + 3),
                             menuTextColor, menuItemsList[j]);
 
                         // Handle menu item clicks

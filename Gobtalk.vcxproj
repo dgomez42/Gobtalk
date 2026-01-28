@@ -103,13 +103,19 @@
       <PreprocessorDefinitions>
       </PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)imgui;$(ProjectDir)imgui\backends;$(ProjectDir)include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)imgui;$(ProjectDir)imgui\backends;$(ProjectDir)include;(AdditionalIncludeDirectories);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <AdditionalDependencies>d3d11.lib;d3dcompiler.lib;dxgi.lib</AdditionalDependencies>
     </Link>
+    <PostBuildEvent>
+      <Command>xcopy /Y /D "$(ProjectDir)lib\*.dll" "$(OutDir)"
+xcopy /Y /D /E "$(ProjectDir)data" "$(OutDir)data\"
+xcopy /Y /D /E "$(ProjectDir)ico" "$(OutDir)ico\"
+xcopy /Y /D "$(ProjectDir)data\dtalk_us.dic" "$(OutDir)"</Command>
+    </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
@@ -120,40 +126,40 @@
       <PreprocessorDefinitions>
       </PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)imgui;$(ProjectDir)imgui\backends;$(ProjectDir)include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)imgui;$(ProjectDir)imgui\backends;$(ProjectDir)include;(AdditionalIncludeDirectories);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
-      <SubSystem>Console</SubSystem>
+      <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <AdditionalDependencies>d3d11.lib;d3dcompiler.lib;dxgi.lib</AdditionalDependencies>
     </Link>
+    <PostBuildEvent>
+      <Command>xcopy /Y /D "$(ProjectDir)lib\*.dll" "$(OutDir)"
+xcopy /Y /D /E "$(ProjectDir)data" "$(OutDir)data\"
+xcopy /Y /D /E "$(ProjectDir)ico" "$(OutDir)ico\"
+xcopy /Y /D "$(ProjectDir)data\dtalk_us.dic" "$(OutDir)"</Command>
+    </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="DECtalkWrapper.cpp" />
-    <ClCompile Include="Goblinmode.cpp" />
     <ClCompile Include="imgui\imgui.cpp" />
+    <ClCompile Include="imgui\imgui_demo.cpp" />
+    <ClCompile Include="imgui\imgui_draw.cpp" />
     <ClCompile Include="imgui\imgui_impl_dx11.cpp" />
     <ClCompile Include="imgui\imgui_impl_win32.cpp" />
-    <ClCompile Include="imgui_demo.cpp" />
-    <ClCompile Include="imgui_draw.cpp" />
-    <ClCompile Include="imgui_tables.cpp" />
-    <ClCompile Include="imgui_widgets.cpp" />
-    <ClCompile Include="main.cpp" />
-    <ClCompile Include="Twitchauth.cpp" />
-    <ClCompile Include="Twitcheventsub.cpp" />
-    <ClCompile Include="Twitchmessagehandler.cpp" />
-  </ItemGroup>
-  <ItemGroup>
-    <Image Include="Mondern Win98.ico" />
-    <Image Include="small.ico" />
+    <ClCompile Include="imgui\imgui_tables.cpp" />
+    <ClCompile Include="imgui\imgui_widgets.cpp" />
+    <ClCompile Include="src\DECtalkWrapper.cpp" />
+    <ClCompile Include="src\Goblinmode.cpp" />
+    <ClCompile Include="src\main.cpp" />
+    <ClCompile Include="src\Twitchauth.cpp" />
+    <ClCompile Include="src\Twitcheventsub.cpp" />
+    <ClCompile Include="src\Twitchmessagehandler.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="Mondern Win98.rc" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="DECtalkWrapper.h" />
     <ClInclude Include="framework.h" />
-    <ClInclude Include="Goblinmode.h" />
     <ClInclude Include="imgui\imgui.h" />
     <ClInclude Include="imgui\imgui_impl_dx11.h" />
     <ClInclude Include="imgui\imgui_impl_win32.h" />
@@ -161,9 +167,6 @@
     <ClInclude Include="Mondern_Win98.h" />
     <ClInclude Include="Resource.h" />
     <ClInclude Include="targetver.h" />
-    <ClInclude Include="Twitchauth.h" />
-    <ClInclude Include="Twitcheventsub.h" />
-    <ClInclude Include="Twitchmessagehandler.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

@@ -1,12 +1,12 @@
-#define NOMINMAX
+﻿#define NOMINMAX
 #include <WinSock2.h>
 #include <WS2tcpip.h>
 #include "TwitchMessageHandler.h"
-#include "Twitchauth.h"
+#include "TwitchAuth.h"
+#include "GoblinMode.h"
 #include <iostream>
 #include <sstream>
 #include <algorithm>
-#include"Goblinmode.h"
 
 TwitchMessageHandler::TwitchMessageHandler(DECtalkWrapper& dectalk)
     : m_dectalk(dectalk)
@@ -167,6 +167,20 @@ void TwitchMessageHandler::OnNewFollower(const std::string& username)
 ExtendedChatMessage TwitchMessageHandler::ParseIRCMessage(const std::string& rawMessage)
 {
     ExtendedChatMessage msg;
+
+    // Initialize all fields to default values (CRITICAL for Release builds!)
+    msg.username = "";
+    msg.displayName = "";
+    msg.message = "";
+    msg.userId = "";
+    msg.timestamp = "";
+    msg.isModerator = false;
+    msg.isSubscriber = false;
+    msg.isVIP = false;
+    msg.isTurbo = false;
+    msg.isBroadcaster = false;
+    msg.subscriberMonths = 0;
+    msg.bits = 0;  // ← THIS FIXES THE BITS BUG!
     msg.rawTags = rawMessage;
 
     // IRC format with tags: @badges=... :user!user@user.tmi.twitch.tv PRIVMSG #channel :message

@@ -20,12 +20,14 @@ private:
     typedef MMRESULT(WINAPI* pfnShutdown)(LPTTS_HANDLE_T);
     typedef MMRESULT(WINAPI* pfnSetSpeaker)(LPTTS_HANDLE_T, SPEAKER_T);
     typedef MMRESULT(WINAPI* pfnSetVolume)(LPTTS_HANDLE_T, int);
+    typedef MMRESULT(WINAPI* pfnSync)(LPTTS_HANDLE_T);
 
     pfnStartup pStartup;
     pfnSpeak pSpeak;
     pfnShutdown pShutdown;
     pfnSetSpeaker pSetSpeaker;
     pfnSetVolume pSetVolume;
+    pfnSync pSync;
 
     // Settings
     std::string dllPath;

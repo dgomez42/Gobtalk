@@ -31,8 +31,9 @@ bool GoblinMode::Initialize(const std::string& dllPath, int audioDevice) {
     pShutdown = (pfnShutdown)GetProcAddress(hDll, "TextToSpeechShutdown");
     pSetSpeaker = (pfnSetSpeaker)GetProcAddress(hDll, "TextToSpeechSetSpeaker");
     pSetVolume = (pfnSetVolume)GetProcAddress(hDll, "TextToSpeechSetVolume");
+    pSync = (pfnSync)GetProcAddress(hDll, "TextToSpeechSync");
 
-    if (!pStartup || !pSpeak || !pShutdown || !pSetSpeaker || !pSetVolume) {
+    if (!pStartup || !pSpeak || !pShutdown || !pSetSpeaker || !pSetVolume || !pSync) {
         std::cerr << "[GoblinMode] Failed to load required DECtalk functions" << std::endl;
         FreeLibrary(hDll);
         hDll = nullptr;
@@ -97,13 +98,11 @@ void GoblinMode::SpeakChaos(const std::string& text) {
             pSpeak(myHandle, &fullText[0], 0);  // 0 = async
         }
 
-        // Wait a bit for speech to start
-        Sleep(100);
-
-        // Keep the handle alive while speaking
-        // This is a hack - we wait for a reasonable time based on text length
-        int estimatedDuration = (int)(text.length() * 100);  // ~100ms per character
-        Sleep(estimatedDuration);
+        // Wait for speech to actually complete using DECtalk's Sync function
+        // This ensures the entire message plays before we shut down the handle
+        if (pSync) {
+            pSync(myHandle);  // Blocks until speech finishes
+        }
 
         // Shutdown this thread's handle
         if (pShutdown) {
