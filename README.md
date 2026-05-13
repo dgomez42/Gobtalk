@@ -10,3 +10,7 @@ There are quality of life features planned:
 
 
 Please suggest anything you may want to see, or if you find any bugs. Thanks.
+
+
+This was a project I wanted to try and use AI for to see how well it performs in creating an actual complex program. So actual updates for this will ver very slow as I will not be using AI for it for future updates. 
+Claude was used for the generating of the code.
